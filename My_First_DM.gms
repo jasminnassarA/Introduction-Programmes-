@@ -63,13 +63,21 @@ QUS(T)..	U_solar(T) =l= 500; #MWh
 QCOAL(T)..	U_Coal(T) =l= 100; #MWh
 QGAS(T)..	U_Gas(T) =l= 600; #MWh
 *Demand with effieicency included 
-QDemand(T)..	PRD_DATA(T) =E= U_solar(T)*1 + U_Coal(T)*0.4 + U_Gas(T)*0.5 ; #MWh 
+*QDemand(T)..	PRD_DATA(T) =E= U_solar(T)*1 + U_Coal(T)*0.4 + U_Gas(T)*0.5 ; #MWh 
+QDemand(T)..	PRD_DATA(T) =E= U_solar(T) + U_Coal(T) + U_Gas(T) ; #MWh 
+
+becouse we assume that what we take is what is given #MWH and the thermal 
+the efficiency is only added in the cost calculation.
 * Sum over T across all products combined with the emission coefficient for each year
 *its an lp sovler so cant use booleon
 *QCost(T)..	Cost(T) =E= 1+ (C_coal(T)*U_Coal(T) +2)$ (U_Coal(T) > 0) + (C_gas(T)*U_Gas(T)+2)$ (U_Gas(T) > 0);
 QPlant1(T)..	Plant1(T) =E= C_solar(T)*U_solar(T); #C_solar=1
-QPlant2(T)..	Plant2(T) =E= 2*U_Coal(T)*0.4 + C_coal(T)*U_Coal(T); # dollars
-QPlant3(T)..	Plant3(T) =E= 2*U_Gas(T)*0.5 + C_gas(T)*U_Gas(T); # Dollars
+QPlant2(T)..	Plant2(T) =E= 2*U_Coal(T) + C_coal(T)*U_Coal(T)/0.4; # dollars
+QPlant3(T)..	Plant3(T) =E= 2*U_Gas(T) + C_gas(T)*U_Gas(T)/0.5; # Dollars
+
+
+*cost = fuel cosrt / efficienct + VOM
+*generation(t,tech) * smrc (tech)
 
 QCost(T)..	Cost(T) =E= Plant1(T) + Plant2(T) + Plant3(T);
 QTOTCost..	TOTCost =E= SUM(T, Cost(T));
@@ -85,4 +93,8 @@ DISPLAY Cost.L, Cost.M, TOTCost.L;
 
 
 
+marginal = demand = cost = demand -> sum of generation (t,tech)
 
+lol = loss of load 
++ sum of loss of load * cost of lol 
+Sum spill * cost of spill
