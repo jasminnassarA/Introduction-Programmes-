@@ -1,3 +1,4 @@
+* My attempt at trying to use csv files for simplicity instead of manually entering data
 $offeolcom
 $eolcom #
 option lp = mosek;
@@ -5,27 +6,34 @@ option lp = mosek;
 SETS
             T       List of all time Hours
 * this means all hours from 1 to 744
-                    /1*744/;    
+                    /1*744/
+            gen     generators 
+                    /Solar,Coal,Gas/
+            f       diffrent fields 
+                    /cost,cap,eff,vom/; #cost($/MWhTh),Cap (MW),eff (MWh/MWhTh),vom($/MWh)
+
 
 PARAMETERS
-C_coal(T)     Cost of coal per unit for each hour
-C_gas(T)      Cost of gas per unit for each hour
-C_solar(T)    Cost of solar per unit for each hour
+data(gen,f)   Input data for cost, capacity, efficiency, and variable O&M for each generator
 PRD_DATA(T)   Input data for production quantity
-MAX_Marg(T)   Maximum marginal cost for each hour
 d(T)   Demand for each hour;
 
-C_coal(T) = 7.8; # $/MWhTh
-C_gas(T) = 19.8; # $/MWhTh
-C_solar(T) = 1;# $/MWhTh
+*Note to self = i can assign the values in data(gen,f) to there own Peramerter/Scalar if i think i will get confusing
+* Question -> is this better as it is more consice or should i assign each value individually for clarity? 
 
 
+$call csv2gdx Inputs\base_case.csv id=data_in index =1 values =2..5 useHeader=y output=Inputs\base_case.gdx
 
+$gdxin Inputs\base_case.gdx
+$load data = data_in
+$gdxin
+
+
+* Assigning cost for each generator based on the excel input
 $call gdxxrw.exe i=demand.xlsx o=demand.gdx par=d rng=in!A2:B745 Rdim=1 Cdim=0
 $gdxin demand.gdx
 $load d
 $gdxin
-
 
 PRD_DATA(T) = d(T); #MWh
 
@@ -55,46 +63,25 @@ QTOTCost   Equation for total cost for all hours
 QPlant1(T)   Equation for Plant 1 production
 QPlant2(T)   Equation for Plant 2 production
 QPlant3(T)   Equation for Plant 3 production
-
 ;
 
 * 0.4 (plant 2)= effieceny for coal and 0.5 (plant 3)= efficaieny for gas 
-QUS(T)..	U_solar(T) =l= 500; #MWh
-QCOAL(T)..	U_Coal(T) =l= 100; #MWh
-QGAS(T)..	U_Gas(T) =l= 600; #MWh
-*Demand with effieicency included 
-*QDemand(T)..	PRD_DATA(T) =E= U_solar(T)*1 + U_Coal(T)*0.4 + U_Gas(T)*0.5 ; #MWh 
+QUS(T)..	U_solar(T) =l=data('Solar','cap'); #MWh
+QCOAL(T)..	U_Coal(T) =l=data('Coal','cap'); #MWh
+QGAS(T)..	U_Gas(T) =l=data('Gas','cap'); #MWh 
 QDemand(T)..	PRD_DATA(T) =E= U_solar(T) + U_Coal(T) + U_Gas(T) ; #MWh 
 
-becouse we assume that what we take is what is given #MWH and the thermal 
-the efficiency is only added in the cost calculation.
-* Sum over T across all products combined with the emission coefficient for each year
-*its an lp sovler so cant use booleon
-*QCost(T)..	Cost(T) =E= 1+ (C_coal(T)*U_Coal(T) +2)$ (U_Coal(T) > 0) + (C_gas(T)*U_Gas(T)+2)$ (U_Gas(T) > 0);
-QPlant1(T)..	Plant1(T) =E= C_solar(T)*U_solar(T); #C_solar=1
-QPlant2(T)..	Plant2(T) =E= 2*U_Coal(T) + C_coal(T)*U_Coal(T)/0.4; # dollars
-QPlant3(T)..	Plant3(T) =E= 2*U_Gas(T) + C_gas(T)*U_Gas(T)/0.5; # Dollars
+* Equations for calculating the production cost for each plant based on utilization and cost parameters
+QPlant1(T)..	Plant1(T) =E= data('Solar','vom')*U_solar(T)+ data('Solar','cost')*U_solar(T)/data('Solar','eff'); 
+QPlant2(T)..	Plant2(T) =E= data('Coal','vom')*U_Coal(T) + data('Coal','cost')*U_Coal(T)/data('Coal','eff'); # dollars
+QPlant3(T)..	Plant3(T) =E= data('Gas','vom')*U_Gas(T) + data('Gas','cost')*U_Gas(T)/data('Gas','eff'); # Dollars
 
-
-*cost = fuel cosrt / efficienct + VOM
-*generation(t,tech) * smrc (tech)
-
+* Equations for calculating the total cost for each hour and the total cost for all hours
 QCost(T)..	Cost(T) =E= Plant1(T) + Plant2(T) + Plant3(T);
 QTOTCost..	TOTCost =E= SUM(T, Cost(T));
 
 MODEL CLIMATE /ALL/;
 SOLVE CLIMATE USING lp MINIMIZING TOTCost;
 
-DISPLAY Cost.L, Cost.M, TOTCost.L;
+DISPLAY QDemand.M, TOTCost.L;
 
-*MAX_Marg(T) = MAX(QPlant1(T), QPlant2(T), QPlant3(T));
-
-*DISPLAY MAX_Marg;
-
-
-
-marginal = demand = cost = demand -> sum of generation (t,tech)
-
-lol = loss of load 
-+ sum of loss of load * cost of lol 
-Sum spill * cost of spill
