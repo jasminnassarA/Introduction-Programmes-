@@ -1,0 +1,104 @@
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/14/26 10:37:15 Page 1
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+   3   
+   4  SETS
+   5              J      List of Plants available
+   6                       /1 , 2, 3/
+   7              T       List of all time Hours
+   8  * this means all hours from 1 to 744
+   9                      /1*744/;
+  10   
+  11  PARAMETERS
+  12  C_coal(T)     Cost of coal per unit for each hour
+  13  C_gas(T)      Cost of gas per unit for each hour
+  14  C_solar(T)    Cost of solar per unit for each hour
+  15  PRD_DATA(T)   Input data for production quantity;
+  16   
+  17   
+  18  C_coal(T) = 7.8; # $/MWhTh
+  19  C_gas(T) = 19.8; # $/MWhTh
+  20  C_solar(T) = 1;# $/MWhTh
+  21   
+  32  $offEmbeddedCode
+****                $865
+**** 865  Problem in embedded code section
+  33   
+  34  PRD_DATA(T) = d(T);
+****                $140
+**** 140  Unknown symbol
+  35   
+  36  VARIABLES
+  37  TOTCost(J,T)     Total cost of emissions for all hours
+  38  Cost(T)     Total cost for each hour
+  39  U_solar(T)     Utilization of solar energy for each hour
+  40  U_Coal(T)     Utilization of coal energy for each hour
+  41  U_Gas(T)     Utilization of gas energy for each hour
+  42   
+  43  ;
+  44   
+  45  POSITIVE VARIABLES U_solar,U_Coal,U_Gas;
+  46   
+  47   
+  48  EQUATIONS
+  49  * The equation definition block:
+  50  QUS(T)     Equation for Solar Utililzation
+  51  QCOAL(T)   Equation for coal utilization
+  52  QGAS(T)    Equation for gas utilization
+  53  QDemand(T)   Equation for demand satisfaction
+  54  QCost(T)   Equation for total cost for each hour
+  55  QTOTCost   Equation for total cost for all hours
+  56  ;
+  57   
+  58  QUS(T)..        U_solar(T) =l= 500;
+  59  QCOAL(T)..      U_Coal(T) =l= 100;
+  60  QGAS(T)..       U_Gas(T) =l= 600;
+  61  *Demand with effieicency included
+  62  QDemand(T)..    U_solar(T) + U_Coal(T)*0.4 + U_Gas(T)*0.5 = E = PRD_DATA(T);
+****                                                              $140,37,409
+****  37  '=l=' or '=e=' or '=g=' operator expected
+**** 140  Unknown symbol
+**** 409  Unrecognizable item - skip to find a new statement
+****        looking for a ';' or a key word to get started again
+  63  * Sum over T across all products combined with the emission coefficient for each year
+  64  QCost(T)..      Cost(T) =E= (C_coal(T)*U_Coal(T) +2) + (C_gas(T)*U_Gas(T)+2) + (C_solar(T)*(U_solar(T)/U_solar(T)));
+  65  QTOTCost..      TOTCost =E= SUM(T, Cost(T));
+****                            $148
+**** 148  Dimension different - The symbol is referenced with more/less
+****         indices as declared
+  66   
+  67  MODEL CLIMATE /ALL/;
+  68  SOLVE CLIMATE USING DNLP MINIMIZING TOTCost;
+****                                            $148,257
+**** 148  Dimension different - The symbol is referenced with more/less
+****         indices as declared
+**** 257  Solve statement not checked because of previous errors
+  69   
+  70  DISPLAY INDEX,Cost,TOTCost;
+****              $140 $143,141$143,141
+**** 140  Unknown symbol
+**** 141  Symbol declared but no values have been assigned. Check for missing
+****         data definition, assignment, data loading or implicit assignment
+****         via a solve statement.
+****         A wild shot: You may have spurious commas in the explanatory
+****         text of a declaration. Check symbol reference list.
+**** 143  A suffix is missing
+
+**** 13 ERROR(S)   0 WARNING(S)
+
+
+COMPILATION TIME     =        0.594 SECONDS      3 MB  41.4.0 caab8bc0 WEX-WEI
+
+
+USER: Machine Based License for up to 168 cores      S220126|0002CO-GEN
+      Aurora Energy Research Limited, -Current Gen License-     DC16080
+
+
+**** FILE SUMMARY
+
+Input      C:\Users\JasminNassar\OneDrive - Aurora Energy Research\Documents\Intro training\Intro to GAMs\My_First_DM.gms
+Output     C:\Users\JasminNassar\OneDrive - Aurora Energy Research\Documents\Intro training\Intro to GAMs\My_First_DM.lst
+
+**** USER ERROR(S) ENCOUNTERED

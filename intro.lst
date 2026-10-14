@@ -1,0 +1,168 @@
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 1
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+   1  Parameters
+   2   
+   3      A
+   4      B   ;
+   5   
+   6  A=3;
+   7  B=5;
+   8   
+   9  Variables
+  10   
+  11      X1      "Explanatory text on the meaning of X1"
+  12      Y       "Explanatory text on the meaning of Y"
+  13      ;
+  14   
+  15  Equations
+  16   
+  17      QX1     "Explanatory text on the meaning of the equation for X1"
+  18      QY      "Explanatory text on the meaning of the equation for Y"
+  19      ;
+  20   
+  21   
+  22  QX1..          X1 =L= A;
+  23  QY..        Y =E= X1 + B;
+  24   
+  25  MODEL TEST /ALL/;
+  26  SOLVE TEST USING DNLP MAXIMIZING Y;
+
+
+COMPILATION TIME     =        0.016 SECONDS      2 MB  41.4.0 caab8bc0 WEX-WEI
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 2
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Equation Listing    SOLVE TEST Using DNLP From line 26
+
+
+---- QX1  =L=  Explanatory text on the meaning of the equation for X1
+
+QX1..  X1 =L= 3 ; (LHS = 0)
+     
+
+---- QY  =E=  Explanatory text on the meaning of the equation for Y
+
+QY..  - X1 + Y =E= 5 ; (LHS = 0, INFES = 5 ****)
+     
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 3
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Column Listing      SOLVE TEST Using DNLP From line 26
+
+
+---- X1  Explanatory text on the meaning of X1
+
+X1
+                (.LO, .L, .UP, .M = -INF, 0, +INF, 0)
+        1       QX1
+       -1       QY
+
+
+---- Y  Explanatory text on the meaning of Y
+
+Y
+                (.LO, .L, .UP, .M = -INF, 0, +INF, 0)
+        1       QY
+
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 4
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Range Statistics    SOLVE TEST Using DNLP From line 26
+
+
+RANGE STATISTICS (ABSOLUTE NON-ZERO FINITE VALUES)
+
+RHS       [min, max] : [ 3.000E+00, 5.000E+00]
+Bound     [min, max] : [        NA,        NA]
+Matrix    [min, max] : [ 1.000E+00, 1.000E+00]
+
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 5
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Model Statistics    SOLVE TEST Using DNLP From line 26
+
+
+MODEL STATISTICS
+
+BLOCKS OF EQUATIONS           2     SINGLE EQUATIONS            2
+BLOCKS OF VARIABLES           2     SINGLE VARIABLES            2
+NON ZERO ELEMENTS             3     NON LINEAR N-Z              0
+CODE LENGTH                   0     CONSTANT POOL              16
+
+
+GENERATION TIME      =        0.000 SECONDS      3 MB  41.4.0 caab8bc0 WEX-WEI
+GAMS 41.4.0  caab8bc0 Dec 14, 2022          WEX-WEI x86 64bit/MS Windows - 10/11/26 20:47:10 Page 6
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Solution Report     SOLVE TEST Using DNLP From line 26
+
+
+               S O L V E      S U M M A R Y
+
+     MODEL   TEST                OBJECTIVE  Y
+     TYPE    DNLP                DIRECTION  MAXIMIZE
+     SOLVER  CONOPT              FROM LINE  26
+
+**** SOLVER STATUS     1 Normal Completion
+**** MODEL STATUS      1 Optimal
+**** OBJECTIVE VALUE                8.0000
+
+ RESOURCE USAGE, LIMIT          0.156 10000000000.000
+ ITERATION COUNT, LIMIT         4    2147483647
+ EVALUATION ERRORS              0             0
+--- *** This solver runs with a demo license. No commercial use.
+ 
+ 
+    C O N O P T 3   version 3.17N
+    Copyright (C)   ARKI Consulting and Development A/S
+                    Bagsvaerdvej 246 A
+                    DK-2880 Bagsvaerd, Denmark
+ 
+ 
+ ** Warning **  The value of LFITER is out of range.
+                LFITER is decreased from 2147483647 to 1000000000.
+ 
+                   Pre-triangular equations:   0
+                   Post-triangular equations:  2
+ 
+ 
+ ** Optimal solution. There are no superbasic variables.
+ 
+ 
+ CONOPT time Total                            0.002 seconds
+   of which: Function evaluations             0.000 =  0.0%
+             1st Derivative evaluations       0.000 =  0.0%
+ 
+
+                           LOWER          LEVEL          UPPER         MARGINAL
+
+---- EQU QX1               -INF            3.0000         3.0000         1.0000      
+---- EQU QY                 5.0000         5.0000         5.0000         1.0000      
+
+  QX1  Explanatory text on the meaning of the equation for X1
+  QY  Explanatory text on the meaning of the equation for Y
+
+                           LOWER          LEVEL          UPPER         MARGINAL
+
+---- VAR X1                -INF            3.0000        +INF             .          
+---- VAR Y                 -INF            8.0000        +INF             .          
+
+  X1  Explanatory text on the meaning of X1
+  Y  Explanatory text on the meaning of Y
+
+
+**** REPORT SUMMARY :        0     NONOPT
+                             0 INFEASIBLE
+                             0  UNBOUNDED
+                             0     ERRORS
+
+
+EXECUTION TIME       =        0.391 SECONDS      3 MB  41.4.0 caab8bc0 WEX-WEI
+
+
+USER: Machine Based License for up to 168 cores      S220126|0002CO-GEN
+      Aurora Energy Research Limited, -Current Gen License-     DC16080
+
+
+**** FILE SUMMARY
+
+Input      C:\Users\JasminNassar\OneDrive - Aurora Energy Research\Documents\Intro training\Intro to GAMs\intro.gms
+Output     C:\Users\JasminNassar\OneDrive - Aurora Energy Research\Documents\Intro training\Intro to GAMs\intro.lst
