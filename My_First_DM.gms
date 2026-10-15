@@ -30,8 +30,8 @@ $gdxin
 
 
 * Assigning cost for each generator based on the excel input
-$call gdxxrw.exe i=demand.xlsx o=demand.gdx par=d rng=in!A2:B745 Rdim=1 Cdim=0
-$gdxin demand.gdx
+$call csv2gdx Inputs\demand(in).csv id=d index =1 values =2 useHeader=y output=Inputs\demand(in).gdx
+$gdxin Inputs\demand(in).gdx
 $load d
 $gdxin
 
