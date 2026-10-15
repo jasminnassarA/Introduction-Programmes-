@@ -1,4 +1,4 @@
-gen,cost,cap,eff ,vom
-Solar,0,500,1,1
-Coal,7.8,100,0.4,2
-Gas,19.8 ,600,0.5,2
+Plant,gen,cost,cap,eff ,vom
+Plant1,Solar,0,500,1,1
+Plant2,Coal,7.8,100,0.4,2
+Plant3,Gas,19.8 ,600,0.5,2

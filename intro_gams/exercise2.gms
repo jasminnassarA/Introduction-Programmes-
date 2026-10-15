@@ -93,4 +93,4 @@ DISPLAY RES,INDEX;
 execute_UNLOAD '3_2_21.gdx', res;
 execute 'gdxxrw.exe 3_2_21.gdx par=res';
 *this works becouse it bypasses think cell
-execute 'gdxxrw.exe 3_2_21.gdx output=3_2_21.xlsx par=res rng=Results!A1';
+*execute 'gdxxrw.exe 3_2_21.gdx output=3_2_21.xlsx par=res rng=Results!A1';
