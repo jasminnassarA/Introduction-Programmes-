@@ -16,10 +16,10 @@ SETS
 
 
 PARAMETERS
-data(gen,f) "Input data for cost, capacity, efficiency, and variable O&M for each generator"
-PRD_DATA(T) "Input data for production quantity"
-d(T) "Demand for each hour"
-ExcelResults(T,outfield) "Values exported to Excel";
+data(gen,f) Input data for cost, capacity, efficiency, and variable O&M for each generator
+PRD_DATA(T) Input data for production quantity
+d(T) Input data for demand for each hour
+ExcelResults(T,outfield) Values exported to Excel;
 
 *Note to self = i can assign the values in data(gen,f) to there own Peramerter/Scalar if i think i will get confusing
 * Question -> is this better as it is more consice or should i assign each value individually for clarity? 
