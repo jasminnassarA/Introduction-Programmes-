@@ -25,7 +25,7 @@ ExcelResults(T,outfield) "Values exported to Excel";
 * Question -> is this better as it is more consice or should i assign each value individually for clarity? 
 
 
-$call csv2gdx Inputs\base_case.csv id=data_in index =2 values =3..6 useHeader=y output=Inputs\base_case.gdx
+$call csv2gdx Inputs\base_case.csv id=data_in index =1 values =2..5 useHeader=y output=Inputs\base_case.gdx
 
 $gdxin Inputs\base_case.gdx
 $load data = data_in
