@@ -130,6 +130,22 @@ def test_summary_page(hourly, params):
     assert list(cf.x) == ["r1"] and cf.y[0] == pytest.approx(20)
 
 
+def test_summary_figures_thread_safe(hourly):
+    """Dash builds summary charts in parallel threads; px used to fail with 'ValueError: Invalid value'."""
+    from concurrent.futures import ThreadPoolExecutor
+    from dashboard.data import access
+    from dashboard.pages import summary
+
+    def build(i):
+        k = ("cf", "cost")[i % 2]
+        with access.PLOT_LOCK:
+            return summary._figure(k, hourly, {}, ["Solar", "Coal", "Gas"])
+
+    with ThreadPoolExecutor(8) as ex:
+        figs = list(ex.map(build, range(200)))
+    assert all(f.data for f in figs)
+
+
 def test_mix_share(hourly):
     mix = metrics.generation_mix(hourly)
     assert mix["share"].sum() == pytest.approx(100)
@@ -173,6 +189,15 @@ def test_selected_gens():
     assert access.selected_gens(None) == config.GENERATORS
     assert access.selected_gens(["Gas", "Solar"]) == ["Solar", "Gas"]
     assert access.selected_gens([]) == []
+    assert access.selected_gens(["Battery", "Gas"]) == ["Gas"]
+    assert access.show_battery(None) and access.show_battery(["Battery"])
+    assert not access.show_battery(["Solar", "Gas"])
+
+
+def test_sidebar_has_battery_option():
+    from dashboard.components import sidebar
+    lay = str(sidebar.layout())
+    assert "'label': 'Battery'" in lay and config.CHECKLIST_ITEMS[-1] == "Battery"
 
 
 def test_dispatch_figure(hourly):
@@ -187,7 +212,7 @@ def test_dispatch_figure(hourly):
 def test_sidebar_has_scenario_only():
     from dashboard.components import sidebar
     lay = str(sidebar.layout())
-    assert "scenario" in lay and "hour-start" in lay
-    for gone in ("run-select", "snap-btn", "date-start", "freq"):
+    assert "scenario" in lay and "hours" in lay
+    for gone in ("run-select", "snap-btn", "date-start", "freq", "hour-start", "hour-prev", "hour-next"):
         assert gone not in lay
     assert [o["value"] for o in sidebar.scenario_options()] == ["base", "renewable", "ramping", "batteries", "both"]

@@ -1,7 +1,7 @@
 """Dash entry point: python -m dashboard.app  ->  http://127.0.0.1:8050"""
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback_context, dcc, html
+from dash import Input, Output, State, dcc, html
 
 from dashboard import config
 from dashboard.components import sidebar
@@ -49,36 +49,13 @@ def run_models(_n, *values):
     return caps, runner.last_status
 
 
-@app.callback(
-    Output("hour-start", "value"), Output("hour-start", "max"),
-    Input("scenario", "value"), Input("hour-prev", "n_clicks"), Input("hour-next", "n_clicks"),
-    Input("hours", "value"), Input("caps", "data"),
-    State("hour-start", "value"),
-)
-def set_start(scenario, _p, _n, hours, caps, current):
-    hours = access.clamp_hours(hours)
-    df, _ = access.load_selected(scenario, caps)
-    if df.empty:
-        return 1, 1
-    max_t = int(df["T"].max())
-    cur = current or 1
-    trig = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
-    if trig == "hour-prev":
-        cur -= hours
-    elif trig == "hour-next":
-        cur += hours
-    hi = max(1, max_t - hours + 1)
-    return access.clamp_start(cur, hours, max_t), hi
-
-
 @app.callback(Output("hour-range", "children"),
-              Input("hour-start", "value"), Input("hours", "value"), Input("scenario", "value"),
-              Input("caps", "data"))
-def show_range(start, hours, scenario, caps):
+              Input("hours", "value"), Input("scenario", "value"), Input("caps", "data"))
+def show_range(hours, scenario, caps):
     df, _ = access.load_selected(scenario, caps)
     if df.empty:
         return ""
-    _, s, last = access.filter_window(df, start, hours)
+    _, s, last = access.filter_window(df, 1, hours)
     return access.range_label(s, last)
 
 

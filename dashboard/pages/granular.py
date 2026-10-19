@@ -51,7 +51,7 @@ def _kpis(w, gens):
     return cols
 
 
-def dispatch_figure(w, gens):
+def dispatch_figure(w, gens, battery=True):
     """Per scenario: dispatch panel with its price (DemandMarginal) panel directly underneath."""
     run_list = list(w["run"].unique())
     n = max(len(run_list), 1)
@@ -65,7 +65,7 @@ def dispatch_figure(w, gens):
             disp.add_trace(go.Scatter(x=g["T"], y=g[gen], name=gen, stackgroup="r%d" % i,
                                       line=dict(width=0.5, color=config.GEN_COLOURS[gen]),
                                       legendgroup=gen, showlegend=first), row=dr, col=1)
-        if run in BAT_RUNS:
+        if battery and run in BAT_RUNS:
             disp.add_trace(go.Scatter(x=g["T"], y=g["bat_discharge"], name="Battery discharge",
                                       stackgroup="r%d" % i, line=dict(width=0.5, color=config.BAT_COLOURS["discharge"]),
                                       legendgroup="bat_dis", showlegend=True), row=dr, col=1)
@@ -91,16 +91,17 @@ def register_callbacks(app):
     @app.callback(
         Output("g-dispatch", "figure"), Output("g-cost", "figure"), Output("g-kpis", "children"),
         Output("g-soc", "figure"),
-        Input("hour-start", "value"), Input("scenario", "value"), Input("hours", "value"),
+        Input("scenario", "value"), Input("hours", "value"),
         Input("gens", "value"), Input("caps", "data"),
     )
-    def update(start, scenario, hours, gens, caps):
+    def update(scenario, hours, gens, caps):
         df, _ = access.load_selected(scenario, caps)
         if df.empty:
             empty = go.Figure()
             return empty, empty, "No data", empty
+        bat = access.show_battery(gens)
         gens = access.selected_gens(gens)
-        w, _, _ = access.filter_window(df, start, hours)
+        w, _, _ = access.filter_window(df, 1, hours)
 
         cost = go.Figure()
         for run, g in w.groupby("run", sort=False):
@@ -108,4 +109,4 @@ def register_callbacks(app):
             cost.add_trace(go.Scatter(x=g["T"], y=y, name=run, mode="lines"))
         cost.update_layout(title="Hourly cost of selected generators ($)", yaxis_title="$", xaxis_title="Hour",
                            hovermode="x unified", margin=dict(t=50))
-        return dispatch_figure(w, gens), cost, _kpis(w, gens), soc_figure(w)
+        return dispatch_figure(w, gens, bat), cost, _kpis(w, gens), soc_figure(w) if bat else go.Figure()

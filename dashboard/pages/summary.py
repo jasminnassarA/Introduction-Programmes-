@@ -43,7 +43,7 @@ LINES = [("p10", "p10", "#2ca02c", "dot"), ("p50", "p50 median", "#333333", "das
 
 SETTER_COLOURS = config.GEN_COLOURS
 
-GLOBAL_INPUTS = [Input("scenario", "value"), Input("hour-start", "value"),
+GLOBAL_INPUTS = [Input("scenario", "value"),
                  Input("hours", "value"), Input("gens", "value"), Input("caps", "data")]
 
 HEADER = "mt-3 mb-2 border-bottom pb-1"
@@ -233,22 +233,22 @@ def _compact(v):
     return "{:,.0f}".format(v)
 
 
-def share_values(df, gens):
+def share_values(df, gens, battery=True):
     """{run: (labels, MWh)} - selected generators plus Battery (MWh discharged) for battery scenarios."""
     gens = [g for g in config.GENERATORS if g in gens]
     out = {}
     for run in df["run"].unique():
         r = df[df["run"] == run]
         labels, vals = list(gens), [float(r[g].sum()) for g in gens]
-        if run in metrics.battery_runs() and "bat_discharge" in r.columns:
+        if battery and run in metrics.battery_runs() and "bat_discharge" in r.columns:
             labels.append(metrics.BATTERY)
             vals.append(float(r["bat_discharge"].sum()))
         out[run] = (labels, vals)
     return out
 
 
-def _share_pie(df, gens):
-    lv = share_values(df, gens)
+def _share_pie(df, gens, battery=True):
+    lv = share_values(df, gens, battery)
     return _donuts(list(lv), lv, config.GEN_COLOURS_WITH_BATTERY, "MWh", "<b>%s</b><br>MWh", label_all=True)
 
 
@@ -262,19 +262,19 @@ def _setter_pie(df, params):
     return _donuts(runs, lv, SETTER_COLOURS, "hours", "<b>%s</b><br>hours", label_all=True)
 
 
-def _figure(key, df, params, gens):
+def _figure(key, df, params, gens, battery=True):
     if df.empty:
         return go.Figure()
     cmap = config.GEN_COLOURS
     if key == "price":
         return _price_lines(df)
     if key == "share":
-        return _share_pie(df, gens)
+        return _share_pie(df, gens, battery)
     if key == "setter":
         return _setter_pie(df, params)
     if key == "cost":
         d = metrics.cost_breakdown(df)
-        d = d[d["gen"].isin(list(gens) + [metrics.BATTERY])]
+        d = d[d["gen"].isin(list(gens) + ([metrics.BATTERY] if battery else []))]
         fig = px.bar(d, x="run", y="cost", color="gen", color_discrete_map=config.GEN_COLOURS_WITH_BATTERY,
                      labels={"cost": "$", "run": ""})
         for tr in fig.data:
@@ -289,11 +289,11 @@ def _figure(key, df, params, gens):
     return _style(fig)
 
 
-def _windowed(scenario, start, hours, caps=None):
+def _windowed(scenario, hours, caps=None):
     df, params = access.load_selected(scenario, caps)
     if df.empty:
         return df, params
-    w, _, _ = access.filter_window(df, start, hours)
+    w, _, _ = access.filter_window(df, 1, hours)
     return w, params
 
 
@@ -326,30 +326,31 @@ def battery_tiles(df, caps=None):
 
 def register_callbacks(app):
     @app.callback(Output("s-battery", "children"), *GLOBAL_INPUTS)
-    def battery(scenario, start, hours, gens, caps):
-        w, _ = _windowed(scenario, start, hours, caps)
+    def battery(scenario, hours, gens, caps):
+        w, _ = _windowed(scenario, hours, caps)
         return battery_tiles(w, caps)
 
     for key in PLOTS:
         def make(k):
             @app.callback(Output("s-fig-" + k, "figure"), *GLOBAL_INPUTS)
-            def _cb(scenario, start, hours, gens, caps):
-                w, params = _windowed(scenario, start, hours, caps)
-                return _figure(k, w, params, access.selected_gens(gens))
+            def _cb(scenario, hours, gens, caps):
+                w, params = _windowed(scenario, hours, caps)
+                with access.PLOT_LOCK:  # plotly express is not thread-safe (shared template)
+                    return _figure(k, w, params, access.selected_gens(gens), access.show_battery(gens))
         make(key)
 
     @app.callback(Output("s-kpis", "children"), *GLOBAL_INPUTS)
-    def kpis(scenario, start, hours, gens, caps):
-        w, _ = _windowed(scenario, start, hours, caps)
+    def kpis(scenario, hours, gens, caps):
+        w, _ = _windowed(scenario, hours, caps)
         return kpi_tiles(w)
 
     @app.callback(Output("s-table", "data"), Output("s-table", "columns"), Output("s-window", "children"),
                   *GLOBAL_INPUTS)
-    def table(scenario, start, hours, gens, caps):
+    def table(scenario, hours, gens, caps):
         df, params = access.load_selected(scenario, caps)
         if df.empty:
             return [], [], "No data"
-        w, s, last = access.filter_window(df, start, hours)
+        w, s, last = access.filter_window(df, 1, hours)
         label = "Metrics for " + access.range_label(s, last)
         if w.empty:
             return [], [], label

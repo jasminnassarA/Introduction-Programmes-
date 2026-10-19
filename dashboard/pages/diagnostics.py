@@ -23,7 +23,7 @@ SECTIONS = [
     ("setter", "7. Price-setter (hour window)"),
     ("info", "8. Scenario files"),
 ]
-INPUTS = [Input("scenario", "value"), Input("hour-start", "value"), Input("hours", "value"), Input("gens", "value"),
+INPUTS = [Input("scenario", "value"), Input("hours", "value"), Input("gens", "value"),
           Input("caps", "data")]
 
 
@@ -114,33 +114,28 @@ def _ramp_inputs(caps=None):
 
 
 BAT_KEY = "batteries"
-BAT_ROWS = [("cap", "Capacity", "MWh"), ("power", "Power (charge / discharge)", "MW"),
-            ("charg_eff", "Charging efficiency", "-"), ("discharge_eff", "Discharging efficiency", "-"),
-            ("inita_charge", "Initial (= final) charge", "MWh")]
+BAT_ROWS = [("cap", "Capacity (MWh)"), ("power", "Power, charge / discharge (MW)"),
+            ("charg_eff", "Charging efficiency"), ("discharge_eff", "Discharging efficiency"),
+            ("inita_charge", "Initial (= final) charge (MWh)")]
 
 
-def battery_inputs_table(base, applied):
-    rows = [{"parameter": lab, "unit": unit, "csv": base.get(k), "applied": applied.get(k)}
-            for k, lab, unit in BAT_ROWS]
-    rows.append({"parameter": "Round-trip efficiency", "unit": "-",
-                 "csv": base["charg_eff"] * base["discharge_eff"],
+def battery_inputs_table(applied):
+    rows = [{"parameter": lab, "applied": applied.get(k)} for k, lab in BAT_ROWS]
+    rows.append({"parameter": "Round-trip efficiency",
                  "applied": applied["charg_eff"] * applied["discharge_eff"]})
     t = pd.DataFrame(rows)
-    t[["csv", "applied"]] = t[["csv", "applied"]].astype(float).round(4)
+    t["applied"] = t["applied"].astype(float).round(4)
     return t
 
 
 def _bat_inputs(caps=None):
     try:
-        base = loader.load_bat_params(BAT_KEY)
         applied = loader.load_bat_params(BAT_KEY, caps=runner.normalize(caps))
     except Exception as e:
         return [_note("Could not load battery inputs: %s" % e)]
-    t = battery_inputs_table(base, applied)
-    changed = [{"if": {"filter_query": "{csv} != {applied}"}, "backgroundColor": "#fff3cd"}]
-    return [html.H6("Battery inputs", className="mt-4"), _table(t, style_data_conditional=changed),
-            html.Small("csv = %s; applied = values from the sidebar (last Run models). Changed rows highlighted."
-                       % config.SCENARIOS[BAT_KEY]["battery"], className="text-muted")]
+    t = battery_inputs_table(applied)
+    return [html.H6("Battery inputs", className="mt-4"), _table(t),
+            html.Small("applied = values from the sidebar (last Run models).", className="text-muted")]
 
 
 def _size(s):
@@ -266,13 +261,18 @@ def _info(run, key, s, caps=None):
 
 def register_callbacks(app):
     @app.callback([Output("d-window", "children")] + [Output("d-" + k, "children") for k, _ in SECTIONS], *INPUTS)
-    def update(scenario, start, hours, gens, caps):
+    def update(scenario, hours, gens, caps):
+        with access.PLOT_LOCK:  # plotly express is not thread-safe (shared template)
+            return _update(scenario, hours, gens, caps)
+
+    def _update(scenario, hours, gens, caps):
         df, params = access.load_selected(scenario, caps)
         empty = [_note("No data")] * len(SECTIONS)
         if df.empty:
             return ["No data"] + empty
+        show_bat = access.show_battery(gens)
         gens = access.selected_gens(gens)
-        w_all, s, last = access.filter_window(df, start, hours)
+        w_all, s, last = access.filter_window(df, 1, hours)
         keys = {config.scenario_label(k): k for k in config.SCENARIOS}
         out = {k: [] for k, _ in SECTIONS}
         merit_runs = []
@@ -285,7 +285,8 @@ def register_callbacks(app):
             out["health"].append(_run_block(run, [_health(summary)]))
             out["size"].append(_run_block(run, [_size(summary)]))
             merit_runs.append((run, p))
-            bat = loader.load_bat_params(key, caps=runner.normalize(caps)) if "battery" in config.SCENARIOS[key] else None
+            bat = (loader.load_bat_params(key, caps=runner.normalize(caps))
+                   if show_bat and "battery" in config.SCENARIOS[key] else None)
             out["capacity"].append(_capacity(run, w, p, gens, bat))
             out["capvalue"].append(_capvalue(run, qcap, w, gens))
             out["setter"].append(_setter(run, w, p))

@@ -2,7 +2,7 @@
 
 This repository has two parts:
 
-- **Three GAMS dispatch models.** Each one finds the lowest-cost way to meet electricity demand in every hour of one month (744 hours) using Solar, Wind, Coal and Gas generators.
+- **Four GAMS dispatch models.** Each one finds the lowest-cost way to meet electricity demand in every hour of one month (744 hours) using Solar, Wind, Coal and Gas generators (and, in the last model, a battery).
 - **A Python Dash dashboard.** It lets you explore the model results, compare scenarios, change generator capacities and re-run the models from your browser.
 
 > **Branch:** this README describes the **`AI-Dashboard`** branch. The dashboard only exists on this branch.
@@ -48,7 +48,7 @@ Pre-computed results are included in `Results/`, so the dashboard shows data str
 
 ## 1. What the models do
 
-All three models are **linear programs (LPs)** solved with **MOSEK**. Each runs over hours `T = 1..744`.
+All four models are **linear programs (LPs)** solved with **MOSEK**. Each runs over hours `T = 1..744`.
 
 - **Objective:** minimise the total generation cost. For each generator and hour this is `generation × (fuel cost / efficiency + variable O&M cost)`.
 - **Constraints:**
@@ -60,12 +60,14 @@ All three models are **linear programs (LPs)** solved with **MOSEK**. Each runs 
 | `My_First_DM.gms` | **Base case** | Solar, Coal, Gas | The basic dispatch model |
 | `RenewbaleInt.gms` | **Renewable intermittency** | Solar, Wind, Coal, Gas | Each hour, available capacity = capacity × hourly load factor (from `normalisedloads.csv`), so Wind and Solar vary over time |
 | `DM_w_ramping.gms` | **Ramping** | Solar, Wind, Coal, Gas | Everything in the renewable model, plus ramp limits (`ramp_L × cap` per hour) and a ramping cost in the objective |
+| `Adding_Batteries.gms` | **Batteries** | Solar, Wind, Coal, Gas + Battery | Everything in the ramping model, plus a battery (state of charge, charge/discharge power limits and efficiencies from `Battery_in.csv`). The battery has no operating cost |
 
 Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fields are:
 
 - `DemandMarginal`: the electricity price (the shadow price of the demand constraint).
 - `Demand`
 - Generation for each generator.
+- For the battery model: charge, discharge and state of charge.
 
 ---
 
@@ -91,7 +93,7 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 ├── Inputs/
 │   ├── base_case.csv             Generator data, base case
 │   ├── Renewable_intermit.csv    Generator data incl. Wind and ramp parameters
-│   ├── Battery_in.csv            Battery size, power and efficiencies
+│   ├── Battery_in.csv            Battery size (MWh), power (MW), efficiencies, initial charge
 │   ├── demand(in).csv            Hourly demand (744 h)
 │   ├── normalisedloads.csv       Hourly availability factors per generator
 │   ├── base_case.gdx             GDX copies of the generator data
@@ -201,13 +203,16 @@ Each run:
 | `My_First_DM.gms` | `base_case.csv`, `demand(in).csv` | `Results\My_First_DM_results.gdx` |
 | `RenewbaleInt.gms` | `Renewable_intermit.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\Renewable_intermit.gdx` |
 | `DM_w_ramping.gms` | `Renewable_intermit.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\ramping.gdx` |
+| `Adding_Batteries.gms` | `Renewable_intermit.csv`, `Battery_in.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\Batteries.gdx` |
 
 ### Optional command-line flags
 
 | Flag | Effect |
 |---|---|
 | `--solarCap=<MW>` | Override Solar capacity |
-| `--windCap=<MW>` | Override Wind capacity (renewable and ramping models) |
+| `--windCap=<MW>` | Override Wind capacity (renewable, ramping and battery models) |
+| `--batCap=<MWh>` / `--batPower=<MW>` | Override battery size / power (battery model) |
+| `--batChEff=<0-1>` / `--batDisEff=<0-1>` | Override battery charge / discharge efficiency (battery model) |
 | `--coalCap=<MW>` | Override Coal capacity |
 | `--gasCap=<MW>` | Override Gas capacity |
 | `--outdir=<folder>` | Write results to another folder (default `Results`) |
@@ -243,6 +248,8 @@ gams models\RenewbaleInt.gms o=outputs\RenewbaleInt.lst --solarCap=1000 --noxlsx
 **`Inputs/demand(in).csv`** contains `Hour` and `Demand in region 1 (MWh)` for 744 hours.
 
 **`Inputs/normalisedloads.csv`** contains `Hour, Wind, Solar, Gas, Coal`. Each value is an availability factor between 0 and 1.
+
+**`Inputs/Battery_in.csv`** has one row per battery: `battery, cap` (MWh), `power` (MW), `charg_eff`, `discharge_eff`, `inita_charge` (MWh at hour 1).
 
 To build your own scenario, edit these CSVs (keeping the column layout) and re-run the models.
 
@@ -283,18 +290,18 @@ The dashboard reads:
 
 | Control | What it does |
 |---|---|
-| **Scenario** dropdown | Choose **Base case**, **Renewable intermittency**, **Ramping** or **All (compare)** to view all three side by side |
-| **Capacities (MW)** dropdowns | One dropdown each for **Solar, Wind, Coal and Gas**. The options are the base capacity from the input CSV × **1, 1.5, 2, 2.5 or 3**. *Wind applies to the Renewable and Ramping scenarios only.* |
+| **Scenario** dropdown | Choose **Base case**, **Renewable intermittency**, **Ramping**, **Batteries** or **All (compare)** to view all four side by side |
+| **Capacities (MW)** dropdowns | One dropdown each for **Solar, Wind, Coal and Gas**. The options are the base capacity from the input CSV × **1, 1.5, 2, 2.5 or 3**. *Wind applies to the Renewable, Ramping and Batteries scenarios.* |
+| **Battery** controls | Capacity (MWh), power (MW) and charge/discharge efficiencies. *Batteries scenario only.* |
 | **Run models** button | Re-solves the models in GAMS with the selected capacities (see below) |
-| **Hours shown** slider | Length of the time window displayed (24–744 hours, in steps of 24) |
-| **Start hour** with **<** / **>** | Moves the time window through the month |
+| **Hours shown** slider | Shows hours 1 to N of the month (N = 24–744, in steps of 24). The window always starts at hour 1 |
 | **Generators** checklist | Shows or hides individual generators in the charts |
 
 ### How "Run models" works
 
 1. Choose capacities in the dropdowns and click **Run models**.
 2. If every capacity is at its base value, the pre-computed results in `Results/` are used and GAMS does not run.
-3. Otherwise, the dashboard runs `gams.exe` for each scenario, passing the `--solarCap`, `--windCap`, `--coalCap` and `--gasCap` flags. Each run happens in a temporary `.tmp_run_*` folder inside the repo, which is deleted afterwards. The status message under the button shows progress.
+3. Otherwise, the dashboard runs `gams.exe` for each scenario, passing the `--solarCap`, `--windCap`, `--coalCap`, `--gasCap` (and battery `--bat*`) flags. Each run happens in a temporary `.tmp_run_*` folder inside the repo, which is deleted afterwards. The status message under the button shows progress.
 4. Results for up to **16** capacity combinations are kept in memory. Switching back to a combination you already ran is instant.
 5. These runs never overwrite your files in `Results/`.
 
@@ -321,6 +328,6 @@ The dashboard reads:
 | Solver / license error in the `.lst` file | Check that your GAMS license includes **MOSEK** |
 | GAMS errors when the path contains spaces | Clone the repo to a path **without spaces** if possible, for example `C:\GAMS_models\...`. The dashboard already works around this for its own runs. |
 | `gdxxrw` error when running a model | Excel is missing. Add `--noxlsx=1` |
-| Dashboard shows no data | Check that `Results\*.gdx` exists, or run the three models (section 5) |
+| Dashboard shows no data | Check that `Results\*.gdx` exists, or run the four models (section 5) |
 | Leftover `.tmp_run_*` or `225a`-style folders | These are temporary GAMS folders and are safe to delete |
 | Port 8050 already in use | Stop the other process, or change `port=` at the bottom of `dashboard/app.py` |

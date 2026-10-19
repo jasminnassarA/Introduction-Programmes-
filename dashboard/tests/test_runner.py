@@ -221,5 +221,16 @@ def test_capacity_checks_with_battery():
 def test_battery_inputs_table():
     from dashboard.pages import diagnostics as pg
     base = {"cap": 500.0, "power": 50.0, "charg_eff": 0.95, "discharge_eff": 0.95, "inita_charge": 0.0}
-    t = pg.battery_inputs_table(base, dict(base, cap=40000.0, charg_eff=0.8))
+    t = pg.battery_inputs_table(dict(base, cap=40000.0, charg_eff=0.8))
+    assert list(t.columns) == ["parameter", "applied"]
     assert t.loc[0, "applied"] == 40000 and t.iloc[-1]["applied"] == round(0.8 * 0.95, 4)
+
+
+def test_battery_toggle_hides_battery():
+    from dashboard.pages import granular, summary
+    df = _bat_df()
+    assert "Battery" not in summary.share_values(df, ["Solar", "Gas"], battery=False)["Batteries"][0]
+    names = [t.name for t in granular.dispatch_figure(df, ["Solar"]).data]
+    assert any(n.startswith("Battery") for n in names)
+    names = [t.name for t in granular.dispatch_figure(df, ["Solar"], battery=False).data]
+    assert not any(n.startswith("Battery") for n in names)

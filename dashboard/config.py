@@ -87,6 +87,9 @@ RESULT_CACHE_SIZE = 16  # capacity combinations kept in memory per dashboard ses
 
 WINDOW_HOURS = 120
 GENERATORS = ["Solar", "Wind", "Coal", "Gas"]
+# Generators checklist in the sidebar: the generators plus a Battery toggle.
+BATTERY_ITEM = "Battery"
+CHECKLIST_ITEMS = GENERATORS + [BATTERY_ITEM]
 GEN_COLOURS = {"Solar": "#f4b400", "Wind": "#17a2b8", "Coal": "#5f5f5f", "Gas": "#4285f4"}
 GEN_COLOURS_WITH_BATTERY = dict(GEN_COLOURS, Battery=BAT_COLOURS["discharge"])
 

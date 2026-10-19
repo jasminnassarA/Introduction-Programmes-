@@ -1,4 +1,6 @@
 """Load the scenario(s) chosen in the sidebar, plus shared global filters (hours only)."""
+import threading
+
 import pandas as pd
 
 from dashboard import config
@@ -6,6 +8,9 @@ from dashboard.data import loader, runner
 
 MIN_HOURS = 24
 MAX_HOURS = 744
+# Dash runs callbacks in parallel threads; plotly express reads a shared global template and
+# fails with "ValueError: Invalid value" when two px figures are built at once. Serialise them.
+PLOT_LOCK = threading.RLock()
 
 
 def load_selected(scenario, caps=None):
@@ -71,3 +76,8 @@ def selected_gens(gens):
     if gens is None:
         return list(config.GENERATORS)
     return [g for g in config.GENERATORS if g in gens]
+
+
+def show_battery(gens):
+    """True if the Battery box is ticked in the generators checklist (None -> all ticked)."""
+    return gens is None or config.BATTERY_ITEM in gens
