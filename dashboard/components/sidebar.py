@@ -12,6 +12,11 @@ def scenario_options():
     return opts
 
 
+def _with_base(options, base):
+    """Dropdown options, making sure the csv base value is selectable."""
+    return sorted(set(options) | ({base} if base is not None else set()))
+
+
 def layout():
     base = runner.default_caps()
     return html.Div(
@@ -36,6 +41,24 @@ def layout():
                                       value=base[g], clearable=False), style={"flex": 1}),
             ], className="d-flex align-items-center mb-1") for g in config.CAP_GENERATORS],
             html.Div("Wind applies to the renewable and ramping scenarios only.", className="small text-muted"),
+            html.Label("Battery", className="fw-bold mt-3"),
+            *[html.Div([
+                html.Span(lab, className="small", style={"width": "5.5rem"}),
+                html.Div(dcc.Dropdown(id=cid, options=[{"label": "{:,}".format(v), "value": v} for v in opts],
+                                      value=base.get(name, opts[0]), clearable=False), style={"flex": 1}),
+            ], className="d-flex align-items-center mb-1") for lab, cid, name, opts in [
+                ("Capacity MWh", "bat-cap", "BatCap", _with_base(config.BAT_CAP_OPTIONS, base.get("BatCap"))),
+                ("Power MW", "bat-power", "BatPower", _with_base(config.BAT_POWER_OPTIONS, base.get("BatPower"))),
+            ]],
+            *[html.Div([
+                html.Span(lab, className="small"),
+                dcc.Slider(id=cid, min=config.BAT_EFF_MIN, max=config.BAT_EFF_MAX, step=config.BAT_EFF_STEP,
+                           value=base.get(name, 0.95),
+                           marks={v: "%.1f" % v for v in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)},
+                           tooltip={"placement": "bottom", "always_visible": True}),
+            ], className="mb-3") for lab, cid, name in [("Charging efficiency", "bat-ch-eff", "BatChEff"),
+                                                        ("Discharging efficiency", "bat-dis-eff", "BatDisEff")]],
+            html.Div("Battery settings apply to the Batteries scenario only.", className="small text-muted"),
             dbc.Button("Run models", id="run-models", color="primary", size="sm", className="mt-2 w-100"),
             dcc.Store(id="caps", data=base),
             dcc.Loading(html.Div(id="run-status", className="small text-muted mt-1",

@@ -43,6 +43,28 @@ def test_costs(hourly):
     assert r["total_cost"] == pytest.approx(r["cost_Solar"] + r["cost_Coal"] + r["cost_Gas"])
 
 
+def test_ramp_cost_skips_hour_one(params):
+    p = params.copy()
+    p["ramp_cost"] = [0.0, 3.0, 0.0]
+    long = pd.DataFrame([(1, "Coal", 50.0), (2, "Coal", 80.0), (3, "Coal", 60.0)],
+                        columns=["T", "outfield", "Value"])
+    demand = pd.Series([50.0, 80.0, 60.0], index=[1, 2, 3])
+    df = loader.build_hourly(long, demand, p, ramp=True)
+    srmc = 2 + 7.8 / 0.4
+    assert df["cost_Coal"].tolist() == pytest.approx([50 * srmc, 80 * srmc + 3 * 30, 60 * srmc + 3 * 20])
+
+
+def test_plant_cost_from_gams_overrides(params):
+    long = pd.DataFrame([(1, "Coal", 50.0), (2, "Coal", 80.0)], columns=["T", "outfield", "Value"])
+    demand = pd.Series([50.0, 80.0], index=[1, 2])
+    pc = loader.plant_cost_from_long(pd.DataFrame(
+        [("Coal", 1, 1000.0), ("Coal", 2, 2000.0), ("Solar", 2, 5.0)], columns=["g", "t", "v"]))
+    df = loader.build_hourly(long, demand, params, ramp=True, plant_cost=pc)
+    assert df["cost_Coal"].tolist() == [1000.0, 2000.0]
+    assert df["cost_Solar"].tolist() == [0.0, 5.0]
+    assert df["total_cost"].tolist() == [1000.0, 2005.0]
+
+
 def test_load_factor_avail(params):
     p = params.copy()
     p.loc["Wind"] = [0, 500, 1, 0.5]
@@ -103,7 +125,7 @@ def test_summary_page(hourly, params):
     assert list(pie.labels) == ["Solar", "Coal"] and list(pie.values) == [4800.0, 2400.0]
     full = loader.complete_params(params)
     sp = summary._figure("setter", hourly, {"r1": full}, ["Solar"]).data[0]
-    assert dict(zip(sp.labels, sp.values)) == {"Solar": 1, summary.D.OTHER: 47}
+    assert dict(zip(sp.labels, sp.values)) == {"Coal": 1, "Gas": 47}  # marginal (partly loaded) unit
     cf = summary._figure("cf", hourly, {}, ["Solar"]).data[0]
     assert list(cf.x) == ["r1"] and cf.y[0] == pytest.approx(20)
 
@@ -134,7 +156,7 @@ def test_filter_window_hours(hourly):
 
 def test_scenario_keys():
     assert config.scenario_keys("base") == ["base"]
-    assert config.scenario_keys(config.BOTH) == ["base", "renewable", "ramping"]
+    assert config.scenario_keys(config.BOTH) == ["base", "renewable", "ramping", "batteries"]
     assert config.scenario_keys(None) == [config.DEFAULT_SCENARIO]
 
 
@@ -143,8 +165,8 @@ def test_load_selected_both(monkeypatch, hourly, params):
                         lambda k, caps=None: hourly.assign(run=config.scenario_label(k)))
     monkeypatch.setattr(loader, "load_gen_params", lambda k, caps=None: loader.complete_params(params))
     df, p = access.load_selected(config.BOTH)
-    assert list(df["run"].unique()) == ["Base case", "Renewable intermittency", "Ramping"]
-    assert set(p) == {"Base case", "Renewable intermittency", "Ramping"}
+    assert list(df["run"].unique()) == ["Base case", "Renewable intermittency", "Ramping", "Batteries"]
+    assert set(p) == {"Base case", "Renewable intermittency", "Ramping", "Batteries"}
 
 
 def test_selected_gens():
@@ -168,4 +190,4 @@ def test_sidebar_has_scenario_only():
     assert "scenario" in lay and "hour-start" in lay
     for gone in ("run-select", "snap-btn", "date-start", "freq"):
         assert gone not in lay
-    assert [o["value"] for o in sidebar.scenario_options()] == ["base", "renewable", "ramping", "both"]
+    assert [o["value"] for o in sidebar.scenario_options()] == ["base", "renewable", "ramping", "batteries", "both"]

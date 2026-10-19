@@ -16,7 +16,7 @@ from dashboard.data import access, diagnostics as D, loader, lst_parser, runner
 SECTIONS = [
     ("health", "1. Run health"),
     ("size", "2. Model size"),
-    ("inputs", "3. Generator inputs (ramping scenario)"),
+    ("inputs", "3. Generator inputs"),
     ("merit", "4. Merit order"),
     ("capacity", "5. Capacity checks (hour window)"),
     ("capvalue", "6. Capacity value - $ saved per extra MW (Qcap marginals, hour window)"),
@@ -113,6 +113,36 @@ def _ramp_inputs(caps=None):
                                   className="text-muted")]
 
 
+BAT_KEY = "batteries"
+BAT_ROWS = [("cap", "Capacity", "MWh"), ("power", "Power (charge / discharge)", "MW"),
+            ("charg_eff", "Charging efficiency", "-"), ("discharge_eff", "Discharging efficiency", "-"),
+            ("inita_charge", "Initial (= final) charge", "MWh")]
+
+
+def battery_inputs_table(base, applied):
+    rows = [{"parameter": lab, "unit": unit, "csv": base.get(k), "applied": applied.get(k)}
+            for k, lab, unit in BAT_ROWS]
+    rows.append({"parameter": "Round-trip efficiency", "unit": "-",
+                 "csv": base["charg_eff"] * base["discharge_eff"],
+                 "applied": applied["charg_eff"] * applied["discharge_eff"]})
+    t = pd.DataFrame(rows)
+    t[["csv", "applied"]] = t[["csv", "applied"]].astype(float).round(4)
+    return t
+
+
+def _bat_inputs(caps=None):
+    try:
+        base = loader.load_bat_params(BAT_KEY)
+        applied = loader.load_bat_params(BAT_KEY, caps=runner.normalize(caps))
+    except Exception as e:
+        return [_note("Could not load battery inputs: %s" % e)]
+    t = battery_inputs_table(base, applied)
+    changed = [{"if": {"filter_query": "{csv} != {applied}"}, "backgroundColor": "#fff3cd"}]
+    return [html.H6("Battery inputs", className="mt-4"), _table(t, style_data_conditional=changed),
+            html.Small("csv = %s; applied = values from the sidebar (last Run models). Changed rows highlighted."
+                       % config.SCENARIOS[BAT_KEY]["battery"], className="text-muted")]
+
+
 def _size(s):
     if s is None:
         return _note("No .lst file for this scenario.")
@@ -150,12 +180,13 @@ def _merit_fig(per_run, window_demand):
     return fig
 
 
-def _capacity(run, w, params, gens):
-    summ, per = D.capacity_checks(w, params, gens)
+def _capacity(run, w, params, gens, bat=None):
+    summ, per = D.capacity_checks(w, params, gens, bat=bat)
     cards = dbc.Row([
         _stat("Peak demand (MW)", _fmt(summ["peak_demand"], "{:,.1f}")),
         _stat("Min demand (MW)", _fmt(summ["min_demand"], "{:,.1f}")),
-        _stat("Total capacity (MW)", _fmt(summ["total_capacity"], "{:,.0f}")),
+        _stat("Total capacity (MW)" + (" incl. battery power" if bat else ""),
+              _fmt(summ["total_capacity"], "{:,.0f}")),
         _stat("Min available (MW)", _fmt(summ["min_available"], "{:,.0f}")),
         _stat("Shortfall hours", _fmt(summ["shortfall_hours"], "{:d}"),
               "success" if summ["shortfall_hours"] == 0 else "danger"),
@@ -163,10 +194,17 @@ def _capacity(run, w, params, gens):
               "success" if summ["adequate"] else "danger"),
         _stat("Adequate?", "yes" if summ["adequate"] else "NO", "success" if summ["adequate"] else "danger"),
     ])
-    fig = px.bar(per, x="gen", y="hours_at_cap", color="gen", color_discrete_map=config.GEN_COLOURS,
+    fig = px.bar(per, x="gen", y="hours_at_cap", color="gen", color_discrete_map=config.GEN_COLOURS_WITH_BATTERY,
                  text="hours_at_cap", labels={"hours_at_cap": "Hours at available capacity", "gen": ""})
     fig.update_layout(showlegend=False, height=260, margin=dict(t=10))
-    return _run_block(run, [cards, dcc.Graph(figure=fig), _table(per.round(2))])
+    extra = []
+    if bat:
+        extra.append(html.Small("Battery: capacity = %s MWh and power = %s MW from the sidebar. Its power is "
+                                "added to the MW totals (upper bound - ignores state of charge); 'hours at "
+                                "capacity' = hours discharging at full power." % (
+                                    "{:,.0f}".format(bat["cap"]), "{:,.0f}".format(bat["power"])),
+                                className="text-muted"))
+    return _run_block(run, [cards, dcc.Graph(figure=fig), _table(per.round(2))] + extra)
 
 
 def _capvalue(run, qcap, w, gens):
@@ -184,7 +222,7 @@ def _capvalue(run, qcap, w, gens):
 
 def _setter(run, w, params):
     d = D.price_setter(w, params)
-    cmap = dict(config.GEN_COLOURS, **{D.OTHER: "#bbbbbb"})
+    cmap = config.GEN_COLOURS
     fig = px.bar(d, x="setter", y="hours", color="setter", color_discrete_map=cmap, text="hours",
                  labels={"setter": "", "hours": "Hours setting the price"})
     fig.update_layout(showlegend=False, height=260, margin=dict(t=10))
@@ -196,8 +234,8 @@ def _info(run, key, s, caps=None):
     sc = config.SCENARIOS[key]
     src = loader.gen_params_source(key)
     full, gens = runner.normalize(caps), runner.scenario_gens(key)
-    cap_text = ", ".join("%s %d" % (g, c) if g in gens else "%s n/a (not in this model)" % g
-                         for g, c in full.items())
+    cap_text = ", ".join("%s %d" % (g, full[g]) if g in gens else "%s n/a (not in this model)" % g
+                         for g in config.CAP_GENERATORS)
     if runner.is_default(caps):
         lst, gdx = _exists(runner.lst_path(key)), _exists(runner.results_path(key))
     else:
@@ -213,6 +251,15 @@ def _info(run, key, s, caps=None):
     ]
     if sc["load_factor"] is not None:
         rows.append(("Load factors", _exists(root / sc["load_factor"])))
+    if "battery" in sc:
+        try:
+            b = loader.load_bat_params(key, caps=full)
+            rows.append(("Battery", "%s MWh, %s MW, charge eff %.2f, discharge eff %.2f, initial charge %s MWh"
+                         % ("{:,.0f}".format(b["cap"]), "{:,.0f}".format(b["power"]), b["charg_eff"],
+                            b["discharge_eff"], "{:,.0f}".format(b.get("inita_charge", 0)))))
+        except Exception as e:
+            rows.append(("Battery", "could not load: %s" % e))
+        rows.append(("Battery inputs", _exists(root / sc["battery"])))
     return _run_block(run, [html.Table([html.Tr([html.Td(k, className="text-muted pe-3"), html.Td(v)])
                                         for k, v in rows], className="small")])
 
@@ -238,11 +285,12 @@ def register_callbacks(app):
             out["health"].append(_run_block(run, [_health(summary)]))
             out["size"].append(_run_block(run, [_size(summary)]))
             merit_runs.append((run, p))
-            out["capacity"].append(_capacity(run, w, p, gens))
+            bat = loader.load_bat_params(key, caps=runner.normalize(caps)) if "battery" in config.SCENARIOS[key] else None
+            out["capacity"].append(_capacity(run, w, p, gens, bat))
             out["capvalue"].append(_capvalue(run, qcap, w, gens))
             out["setter"].append(_setter(run, w, p))
             out["info"].append(_info(run, key, summary, caps))
-        out["inputs"] = _ramp_inputs(caps)
+        out["inputs"] = _ramp_inputs(caps) + _bat_inputs(caps)
         dem = (float(w_all["demand"].min()), float(w_all["demand"].max())) if not w_all.empty else (None, None)
         out["merit"] = [dcc.Graph(figure=_merit_fig(merit_runs, dem))]
         label = "Window (sections 5-7): " + access.range_label(s, last)

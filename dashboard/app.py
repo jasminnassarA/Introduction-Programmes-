@@ -28,15 +28,20 @@ def route(path):
     return granular.layout()
 
 
+BAT_CONTROLS = {"BatCap": "bat-cap", "BatPower": "bat-power", "BatChEff": "bat-ch-eff", "BatDisEff": "bat-dis-eff"}
+CONTROL_NAMES = list(config.CAP_GENERATORS) + list(BAT_CONTROLS)
+
+
 @app.callback(
     Output("caps", "data"), Output("run-status", "children"),
     Input("run-models", "n_clicks"),
-    [State("cap-" + g.lower(), "value") for g in config.CAP_GENERATORS],
+    [State("cap-" + g.lower(), "value") for g in config.CAP_GENERATORS]
+    + [State(cid, "value") for cid in BAT_CONTROLS.values()],
     prevent_initial_call=True,
 )
 def run_models(_n, *values):
-    """Solve the chosen capacities (in memory, nothing saved) and apply them to every page."""
-    caps = runner.normalize(dict(zip(config.CAP_GENERATORS, values)))
+    """Solve the chosen capacities / battery settings (in memory, nothing saved) and apply them."""
+    caps = runner.normalize(dict(zip(CONTROL_NAMES, values)))
     try:
         runner.get_results(caps)
     except (runner.GamsRunError, OSError) as e:
@@ -85,4 +90,8 @@ summary.register_callbacks(app)
 diagnostics.register_callbacks(app)
 
 if __name__ == "__main__":
-    app.run_server(debug=True, host="127.0.0.1", port=8050)
+    import os
+
+    # DASH_DEBUG=0 (set by setup_and_run.bat) runs without the reloader so the app starts once.
+    debug = os.environ.get("DASH_DEBUG", "1") != "0"
+    app.run_server(debug=debug, host="127.0.0.1", port=8050)

@@ -1,0 +1,2 @@
+battery,cap,power,charg_eff,discharge_eff,inita_charge
+bat_1,500,50,0.95,0.95,0

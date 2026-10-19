@@ -1,7 +1,6 @@
 """Pure calculations for the Diagnostics page (no GAMS / Dash needed)."""
 import pandas as pd
 
-OTHER = "Other / tie"
 
 
 def srmc(params):
@@ -51,13 +50,22 @@ def _avail(w, params, g):
     return pd.Series(float(params.loc[g, "cap"]) if g in params.index else 0.0, index=w.index)
 
 
-def capacity_checks(w, params, gens=None, tol=1e-6):
-    """Adequacy vs nameplate and vs hourly available capacity; hours each gen ran at its available limit."""
+BATTERY = "Battery"
+
+
+def capacity_checks(w, params, gens=None, tol=1e-6, bat=None):
+    """Adequacy vs nameplate and vs hourly available capacity; hours each gen ran at its available limit.
+
+    bat = battery settings {cap (MWh), power (MW), ...}: its power (MW) is added to the MW totals and a
+    Battery row (capacity in MWh, hours at full discharge power / empty / full) is appended.
+    """
     gens = list(active(params).index) if gens is None else [g for g in gens if g in active(params).index]
-    cap_total = float(params["cap"].sum())
+    power = float(bat["power"]) if bat else 0.0
+    cap_total = float(params["cap"].sum()) + power
     peak = float(w["demand"].max()) if not w.empty else 0.0
     low = float(w["demand"].min()) if not w.empty else 0.0
-    avail_total = sum(_avail(w, params, g) for g in params.index) if not w.empty else pd.Series(dtype=float)
+    avail_total = (sum(_avail(w, params, g) for g in params.index) + power
+                   if not w.empty else pd.Series(dtype=float))
     short = int((avail_total < w["demand"] - tol).sum()) if not w.empty else 0
     summary = {"peak_demand": peak, "min_demand": low, "total_capacity": cap_total,
                "min_available": float(avail_total.min()) if not w.empty else 0.0,
@@ -73,6 +81,17 @@ def capacity_checks(w, params, gens=None, tol=1e-6):
                      "hours_at_cap": full,
                      "pct_hours": 100.0 * full / len(w) if len(w) else 0.0,
                      "max_output": float(w[g].max()) if not w.empty else 0.0})
+    if bat:
+        n = len(w)
+        dis = w["bat_discharge"] if "bat_discharge" in w.columns else pd.Series(0.0, index=w.index)
+        soc = w["bat_soc"] if "bat_soc" in w.columns else pd.Series(0.0, index=w.index)
+        full = int((dis >= power - tol).sum()) if power > 0 else 0
+        rows.append({"gen": BATTERY, "cap": power, "avg_available": power, "hours_at_cap": full,
+                     "pct_hours": 100.0 * full / n if n else 0.0,
+                     "max_output": float(dis.max()) if n else 0.0,
+                     "energy_cap_mwh": float(bat["cap"]),
+                     "hours_empty": int((soc <= tol).sum()),
+                     "hours_full": int((soc >= float(bat["cap"]) - 1e-3).sum())})
     return summary, pd.DataFrame(rows)
 
 
@@ -94,18 +113,39 @@ def capacity_value(qcap, w, gens):
     return hourly[["gen", "T", "value"]], pd.DataFrame(rows).round(2)
 
 
-def price_setter(w, params, tol=0.01):
-    """Hours in which each generator's SRMC equals the price (within tol)."""
+def price_setter(w, params, tol=1e-6):
+    """Hours per price-setting generator (marginal unit rule; the battery never sets the price).
+
+    1. Most expensive generator that is partly loaded (0 < output < available) - includes ramp-cost hours.
+    2. All running gens at their limit and the battery discharging: the setter of the battery's
+       charging hours (most expensive marginal unit among window hours where it charges).
+    3. Fallback: most expensive generator running that hour (cheapest active gen if none run).
+    """
     costs = srmc(active(params))
-    counts = {g: 0 for g in costs.index}
-    counts[OTHER] = 0
-    for p in w["price"]:
-        diff = (costs - p).abs()
-        g = diff.idxmin()
-        if diff[g] <= tol and (diff <= tol).sum() == 1:
-            counts[g] += 1
-        else:
-            counts[OTHER] += 1
+    order = list(costs.sort_values(ascending=False, kind="mergesort").index)  # expensive first
+    counts = {g: 0 for g in costs.sort_values(kind="mergesort").index}
+    if w.empty or not order:
+        return pd.DataFrame({"setter": list(counts), "hours": list(counts.values())})
+    out = {g: (w[g] if g in w.columns else pd.Series(0.0, index=w.index)) for g in order}
+    av = {g: _avail(w, params, g) for g in order}
+    zero = pd.Series(0.0, index=w.index)
+    charge = w["bat_charge"] if "bat_charge" in w.columns else zero
+    discharge = w["bat_discharge"] if "bat_discharge" in w.columns else zero
+
+    def marginal(i):
+        return next((g for g in order if tol < out[g].loc[i] < av[g].loc[i] - tol), None)
+
+    def running(i):
+        return next((g for g in order if out[g].loc[i] > tol), order[-1])
+
+    marg = {i: marginal(i) for i in w.index}
+    ch_setters = [marg[i] for i in w.index if charge.loc[i] > tol and marg[i] is not None]
+    bat_setter = next((g for g in order if g in ch_setters), None)
+    for i in w.index:
+        g = marg[i]
+        if g is None:
+            g = bat_setter if (discharge.loc[i] > tol and bat_setter) else running(i)
+        counts[g] += 1
     return pd.DataFrame({"setter": list(counts), "hours": list(counts.values())})
 
 

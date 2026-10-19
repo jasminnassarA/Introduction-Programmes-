@@ -8,6 +8,7 @@ from dashboard import config
 
 PARAM_FIELDS = ["cost", "cap", "eff", "vom"]
 OPTIONAL_FIELDS = ["ramp_cost"]  # kept when present in the inputs (ramping scenario)
+BAT_COLUMNS = {"Bat_Charge": "bat_charge", "Bat_Discharge": "bat_discharge", "Bat_SOC": "bat_soc"}
 
 
 def _fields(cols):
@@ -61,10 +62,42 @@ def read_results_gdx(path):
     return df
 
 
-def build_hourly(results_long, demand, gen_params, run="base", load_factor=None, ramp=False):
+def plant_cost_from_long(long_df):
+    """Long (gen, T, Value) PlantCost -> wide DataFrame indexed by T, one column per generator."""
+    d = long_df.copy()
+    d = d.iloc[:, :3]
+    d.columns = ["gen", "T", "Value"]
+    d["gen"] = d["gen"].astype(str).str.strip()
+    d["T"] = d["T"].astype(int)
+    return d.pivot_table(index="T", columns="gen", values="Value", aggfunc="sum").astype(float)
+
+
+def read_plant_cost_gdx(path):
+    """PlantCost levels (T x gen) from a results gdx, or None if the gdx does not contain it."""
+    import gdxpds
+
+    try:
+        dfs = gdxpds.to_dataframes(str(path), gams_dir=config.GAMS_DIR)
+    except Exception:
+        return None
+    df = dfs.get(config.PLANTCOST_SYMBOL)
+    if df is None or df.empty:
+        return None
+    # Variables come with Level/Marginal/... columns; keep the level.
+    level = [c for c in df.columns if str(c).lower() == "level"]
+    if level:
+        df = df[[df.columns[0], df.columns[1], level[0]]]
+    return plant_cost_from_long(df)
+
+
+def build_hourly(results_long, demand, gen_params, run="base", load_factor=None, ramp=False,
+                 plant_cost=None):
     """Combine long results, demand, generator params and optional load factors into one hourly frame.
 
-    ramp=True adds ramp_cost * |U(t) - U(t-1)| (U(0) = 0, as in GAMS) to each generator cost.
+    plant_cost (T x gen, GAMS PlantCost levels) is used as the generator cost when given, so the
+    dashboard shows exactly what GAMS optimised (total_cost = Cost(T), summing to TOTCost).
+    Without it the cost is recomputed: vom*U + cost*U/eff, and with ramp=True also
+    ramp_cost * |U(t) - U(t-1)| for t > 1 (no ramp cost in hour 1, matching QPlant's $(ord(T)>1)).
     """
     params = complete_params(gen_params)
     r = results_long.copy()
@@ -85,6 +118,10 @@ def build_hourly(results_long, demand, gen_params, run="base", load_factor=None,
         df[g] = wide[g]
     df["demand"] = demand.reindex(df.index).fillna(0.0)
     df["generation"] = df[config.GENERATORS].sum(axis=1)
+    # Battery (only the batteries model writes these; zeros elsewhere)
+    for src, dst in BAT_COLUMNS.items():
+        df[dst] = wide[src] if src in wide.columns else 0.0
+    df["net_battery"] = df["bat_discharge"] - df["bat_charge"]
 
     for g in config.GENERATORS:
         p = params.loc[g]
@@ -92,8 +129,12 @@ def build_hourly(results_long, demand, gen_params, run="base", load_factor=None,
         df["cost_" + g] = df[g] * (p["vom"] + fuel)
         if ramp:
             rc = float(p.get("ramp_cost", 0.0) or 0.0)
-            df["ramp_" + g] = df[g].diff().fillna(df[g]).abs()
+            df["ramp_" + g] = df[g].diff().fillna(0.0).abs()
             df["cost_" + g] += rc * df["ramp_" + g]
+        if plant_cost is not None:
+            gams = plant_cost[g] if g in plant_cost.columns else pd.Series(0.0, index=plant_cost.index)
+            # GDX omits zero levels -> missing hours are 0 cost.
+            df["cost_" + g] = gams.reindex(df.index).fillna(0.0).astype(float)
         lf = 1.0
         if load_factor is not None and g in load_factor.columns:
             lf = load_factor[g].reindex(df.index).fillna(0.0)
@@ -166,7 +207,23 @@ def with_caps(params, caps, gens=None):
     return p
 
 
-def _build(key, root, results_long, caps):
+def load_bat_params(key, root=None, caps=None):
+    """Battery settings {cap, power, charg_eff, discharge_eff, inita_charge} with caps applied,
+    or None if the scenario has no battery."""
+    rel = config.SCENARIOS[key].get("battery")
+    if rel is None:
+        return None
+    df = pd.read_csv(Path(root or config.ROOT) / rel, skipinitialspace=True)
+    df.columns = [c.strip() for c in df.columns]
+    row = df.iloc[0]
+    out = {c: float(str(row[c]).strip()) for c in df.columns[1:]}
+    for name, (col, _, _) in config.BAT_PARAMS.items():
+        if caps and caps.get(name) is not None:
+            out[col] = float(caps[name])
+    return out
+
+
+def _build(key, root, results_long, caps, plant_cost=None):
     lf_path = _path(key, "load_factor", root)
     return build_hourly(
         results_long,
@@ -175,12 +232,13 @@ def _build(key, root, results_long, caps):
         run=config.scenario_label(key),
         load_factor=read_load_factor(lf_path) if lf_path is not None else None,
         ramp=config.SCENARIOS[key].get("ramp", False),
+        plant_cost=plant_cost,
     )
 
 
 @lru_cache(maxsize=32)
 def _load_cached(key, root, results, mtime):
-    return _build(key, root, read_results_gdx(results), None)
+    return _build(key, root, read_results_gdx(results), None, read_plant_cost_gdx(results))
 
 
 def load_scenario(key, root=None, caps=None):
@@ -198,5 +256,6 @@ def load_scenario(key, root=None, caps=None):
         return _load_cached(key, root, str(results), results.stat().st_mtime).copy()
     item = entry[key]
     if "hourly" not in item:
-        item["hourly"] = _build(key, root, item["results"], runner.normalize(caps, root))
+        item["hourly"] = _build(key, root, item["results"], runner.normalize(caps, root),
+                                item.get("plant_cost"))
     return item["hourly"].copy()

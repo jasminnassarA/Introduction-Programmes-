@@ -14,7 +14,27 @@ def layout():
         html.Div(id="g-kpis", className="mb-3"),
         dcc.Graph(id="g-dispatch"),
         dcc.Graph(id="g-cost"),
+        dcc.Graph(id="g-soc"),
     ])
+
+
+BAT_RUNS = {config.scenario_label(k) for k, s in config.SCENARIOS.items() if "battery" in s}
+
+
+def soc_figure(w):
+    fig = go.Figure()
+    for run, g in w.groupby("run", sort=False):
+        if run not in BAT_RUNS:
+            continue
+        fig.add_trace(go.Scatter(x=g["T"], y=g["bat_soc"], name="SOC - %s" % run, mode="lines", fill="tozeroy",
+                                 line=dict(color=config.BAT_COLOURS["soc"])))
+    if not fig.data:
+        fig.update_layout(title="Battery state of charge - select the Batteries scenario", height=200,
+                          xaxis_visible=False, yaxis_visible=False)
+        return fig
+    fig.update_layout(title="Battery state of charge (MWh)", yaxis_title="MWh", xaxis_title="Hour",
+                      hovermode="x unified", margin=dict(t=50), height=320)
+    return fig
 
 
 def _kpis(w, gens):
@@ -32,29 +52,37 @@ def _kpis(w, gens):
 
 
 def dispatch_figure(w, gens):
+    """Per scenario: dispatch panel with its price (DemandMarginal) panel directly underneath."""
     run_list = list(w["run"].unique())
     n = max(len(run_list), 1)
-    disp = make_subplots(rows=n, cols=1, shared_xaxes=True, subplot_titles=run_list,
-                         vertical_spacing=0.08, specs=[[{"secondary_y": True}]] * n)
-    for i, run in enumerate(run_list, start=1):
+    titles = [t for run in run_list for t in ("%s - dispatch" % run, "%s - price" % run)] or None
+    disp = make_subplots(rows=2 * n, cols=1, shared_xaxes=True, subplot_titles=titles,
+                         vertical_spacing=0.03 if n > 1 else 0.06, row_heights=[0.65, 0.35] * n)
+    for i, run in enumerate(run_list):
         g = w[w["run"] == run]
+        dr, pr, first = 2 * i + 1, 2 * i + 2, i == 0
         for gen in gens:
             disp.add_trace(go.Scatter(x=g["T"], y=g[gen], name=gen, stackgroup="r%d" % i,
                                       line=dict(width=0.5, color=config.GEN_COLOURS[gen]),
-                                      legendgroup=gen, showlegend=(i == 1)),
-                           row=i, col=1, secondary_y=False)
+                                      legendgroup=gen, showlegend=first), row=dr, col=1)
+        if run in BAT_RUNS:
+            disp.add_trace(go.Scatter(x=g["T"], y=g["bat_discharge"], name="Battery discharge",
+                                      stackgroup="r%d" % i, line=dict(width=0.5, color=config.BAT_COLOURS["discharge"]),
+                                      legendgroup="bat_dis", showlegend=True), row=dr, col=1)
+            disp.add_trace(go.Scatter(x=g["T"], y=-g["bat_charge"], name="Battery charge", fill="tozeroy",
+                                      line=dict(width=0.5, color=config.BAT_COLOURS["charge"]),
+                                      legendgroup="bat_ch", showlegend=True), row=dr, col=1)
         disp.add_trace(go.Scatter(x=g["T"], y=g["demand"], name="Demand", mode="lines",
                                   line=dict(color="black", dash="dot"), legendgroup="Demand",
-                                  showlegend=(i == 1)), row=i, col=1, secondary_y=False)
-        disp.update_yaxes(title_text="MWh", row=i, col=1, secondary_y=False)
-        # Price (DemandMarginal) on the right axis of every scenario panel
+                                  showlegend=first), row=dr, col=1)
+        disp.update_yaxes(title_text="MWh", row=dr, col=1)
+        # Price (DemandMarginal) in its own panel directly under the dispatch
         disp.add_trace(go.Scatter(x=g["T"], y=g["price"], name="Price ($/MWh)", mode="lines",
                                   line_shape="hv", line=dict(color="red", width=1.5),
-                                  legendgroup="Price", showlegend=(i == 1)),
-                       row=i, col=1, secondary_y=True)
-        disp.update_yaxes(title_text="$/MWh", row=i, col=1, secondary_y=True, showgrid=False)
-    disp.update_xaxes(title_text="Hour", row=n, col=1)
-    disp.update_layout(title="Dispatch by technology & price (DemandMarginal)", height=320 * n,
+                                  legendgroup="Price", showlegend=first), row=pr, col=1)
+        disp.update_yaxes(title_text="$/MWh", row=pr, col=1)
+    disp.update_xaxes(title_text="Hour", row=2 * n, col=1)
+    disp.update_layout(title="Dispatch by technology & price (DemandMarginal)", height=450 * n,
                        hovermode="x unified", margin=dict(t=70))
     return disp
 
@@ -62,6 +90,7 @@ def dispatch_figure(w, gens):
 def register_callbacks(app):
     @app.callback(
         Output("g-dispatch", "figure"), Output("g-cost", "figure"), Output("g-kpis", "children"),
+        Output("g-soc", "figure"),
         Input("hour-start", "value"), Input("scenario", "value"), Input("hours", "value"),
         Input("gens", "value"), Input("caps", "data"),
     )
@@ -69,7 +98,7 @@ def register_callbacks(app):
         df, _ = access.load_selected(scenario, caps)
         if df.empty:
             empty = go.Figure()
-            return empty, empty, "No data"
+            return empty, empty, "No data", empty
         gens = access.selected_gens(gens)
         w, _, _ = access.filter_window(df, start, hours)
 
@@ -79,4 +108,4 @@ def register_callbacks(app):
             cost.add_trace(go.Scatter(x=g["T"], y=y, name=run, mode="lines"))
         cost.update_layout(title="Hourly cost of selected generators ($)", yaxis_title="$", xaxis_title="Hour",
                            hovermode="x unified", margin=dict(t=50))
-        return dispatch_figure(w, gens), cost, _kpis(w, gens)
+        return dispatch_figure(w, gens), cost, _kpis(w, gens), soc_figure(w)

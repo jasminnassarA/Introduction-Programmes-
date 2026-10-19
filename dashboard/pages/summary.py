@@ -1,12 +1,13 @@
 """Summary page: aggregated metrics for the global window, aggregation and generator filter."""
 import dash_bootstrap_components as dbc
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, dash_table, dcc, html
 from plotly.subplots import make_subplots
 
 from dashboard import config
-from dashboard.data import access, metrics
+from dashboard.data import access, loader, metrics
 from dashboard.data import diagnostics as D
 
 # key -> (card title, short explanation)
@@ -15,11 +16,14 @@ PLOTS = {
               "Grey line = hourly price. Flat lines = p10 / p50 (median) / p90 and the "
               "demand-weighted average over the selected window."),
     "share": ("Generation share (whole selected window)",
-              "Share of generation by technology, selected generators only."),
+              "Share of generation by technology, selected generators only. Battery = energy discharged. "
+              "Percentages on the slices, names in the legend below."),
     "setter": ("Price-setting hours (whole selected window)",
-               "Hours in which each generator's marginal cost set the price. "
-               "'Other / tie' = no single generator matched."),
-    "cost": ("Cost by technology", "Total generation cost over the selected hours ($)."),
+               "Price setter = the most expensive generator that is partly loaded in that hour (includes "
+               "hours where a ramp cost is added). Hours supplied by the battery are credited to the generator "
+               "that set the price when it charged. The battery itself has no cost and never sets the price."),
+    "cost": ("Cost by technology", "Total generation cost over the selected hours ($). "
+                                   "The model gives batteries no operating cost (assumption A4), so Battery = $0."),
     "cf": ("Capacity factor (%)", "Generation / available capacity (cap x hourly load factor) over the selected hours."),
 }
 
@@ -37,7 +41,7 @@ KPI_COLOURS = {"min": "#2ca02c", "avg": "#333333", "dw_avg": "#1f77b4", "max": "
 LINES = [("p10", "p10", "#2ca02c", "dot"), ("p50", "p50 median", "#333333", "dash"),
          ("p90", "p90", "#d62728", "dot"), ("dw_avg", "Demand-weighted avg", "#1f77b4", "dashdot")]
 
-SETTER_COLOURS = dict(config.GEN_COLOURS, **{D.OTHER: "#bbbbbb"})
+SETTER_COLOURS = config.GEN_COLOURS
 
 GLOBAL_INPUTS = [Input("scenario", "value"), Input("hour-start", "value"),
                  Input("hours", "value"), Input("gens", "value"), Input("caps", "data")]
@@ -47,9 +51,10 @@ HEADER = "mt-3 mb-2 border-bottom pb-1"
 
 def _card(key):
     title, note = PLOTS[key]
+    body = [dcc.Graph(id="s-fig-" + key)]
     return dbc.Card([
         dbc.CardHeader([html.B(title), html.Div(note, className="text-muted small")]),
-        dbc.CardBody(dcc.Graph(id="s-fig-" + key)),
+        dbc.CardBody(body),
     ], className="mb-3")
 
 
@@ -63,6 +68,8 @@ def layout():
     for header, items in SECTIONS:
         body.append(html.H4(header, className=HEADER))
         body.append(dbc.Row([dbc.Col(_card(k), lg=12 if full else 6) for k, full in items]))
+    body.append(html.H4("Battery (whole selected window)", className=HEADER))
+    body.append(html.Div(id="s-battery", className="mb-2"))
     body.append(html.H4("Summary table", className=HEADER))
     body.append(dbc.Card(dbc.CardBody(dash_table.DataTable(
         id="s-table", export_format="csv", page_size=24,
@@ -168,15 +175,36 @@ def _price_lines(df):
     return fig
 
 
-def _donuts(runs, labels_vals, colours, unit, centre_fmt):
+SMALL_SLICE = 0.03  # slices below 3% show their label on hover / in the legend only
+
+
+def _spread_small(labels, vals):
+    """Reorder so small slices sit between big ones (keeps outside labels of small slices apart)."""
+    order = sorted(range(len(vals)), key=lambda i: -vals[i])
+    big, small = order[:(len(order) + 1) // 2], order[(len(order) + 1) // 2:][::-1]
+    idx = [i for pair in zip(big, small + [None] * len(big)) for i in pair if i is not None]
+    return [labels[i] for i in idx], [vals[i] for i in idx]
+
+
+def _donuts(runs, labels_vals, colours, unit, centre_fmt, label_all=False):
+    """label_all=True labels every non-zero slice (small ones outside, spread apart)."""
     n = len(runs)
-    fig = make_subplots(rows=1, cols=n, specs=[[{"type": "domain"}] * n])
+    fig = make_subplots(rows=1, cols=n, specs=[[{"type": "domain"}] * n], horizontal_spacing=0.12)
     for i, run in enumerate(runs, start=1):
         labels, vals = labels_vals[run]
-        fig.add_trace(go.Pie(labels=labels, values=vals, hole=0.62, sort=False, name=run,
-                             marker=dict(colors=[colours[l] for l in labels],
+        if label_all:
+            labels, vals = _spread_small(labels, vals)
+        tot = float(sum(vals)) or 1.0
+        small = 0.0 if label_all else SMALL_SLICE
+        # big slices: label inside; mid slices: outside; tiny slices: no text (hover + legend)
+        pos = ["inside" if v / tot >= 0.12 else "outside" if v / tot > small or (label_all and v > 0) else "none"
+               for v in vals]
+        fig.add_trace(go.Pie(labels=labels, values=vals, hole=0.55, sort=False, name=run,
+                             marker=dict(colors=[colours.get(l, "#999999") for l in labels],
                                          line=dict(color="white", width=2)),
-                             textinfo="label+percent", textposition="outside",
+                             texttemplate="%{percent:.1%}", textposition=pos,
+                             insidetextorientation="horizontal",
+                             automargin=True, insidetextfont=dict(color="white"),
                              hovertemplate="<b>%{label}</b><br>%{value:,.0f} " + unit
                                            + "<br>%{percent}<extra>" + run + "</extra>"),
                       row=1, col=i)
@@ -184,11 +212,14 @@ def _donuts(runs, labels_vals, colours, unit, centre_fmt):
         fig.add_annotation(text=centre_fmt % _compact(sum(vals)), showarrow=False,
                            x=sum(dom.x) / 2, y=sum(dom.y) / 2, xref="paper", yref="paper",
                            xanchor="center", yanchor="middle", font=dict(size=11))
-        fig.add_annotation(text="<b>%s</b>" % run, showarrow=False, x=sum(dom.x) / 2, y=-0.12,
+        fig.add_annotation(text="<b>%s</b>" % run, showarrow=False, x=sum(dom.x) / 2, y=-0.06,
                            xref="paper", yref="paper", xanchor="center", yanchor="top",
                            font=dict(size=13))
-    _style(fig)
-    fig.update_layout(margin=dict(t=70, b=70, l=30, r=30))
+    _style(fig, height=480)
+    # legend (coloured square + name) in a row under the donuts; slices only carry the percentage
+    fig.update_layout(margin=dict(t=50, b=110, l=50, r=50), uniformtext=dict(minsize=10, mode="show"),
+                      legend=dict(orientation="h", yanchor="top", y=-0.18, x=0.5, xanchor="center",
+                                  title_text=""))
     return fig
 
 
@@ -202,11 +233,23 @@ def _compact(v):
     return "{:,.0f}".format(v)
 
 
-def _share_pie(df, gens):
-    runs = list(df["run"].unique())
+def share_values(df, gens):
+    """{run: (labels, MWh)} - selected generators plus Battery (MWh discharged) for battery scenarios."""
     gens = [g for g in config.GENERATORS if g in gens]
-    lv = {run: (gens, [float(df.loc[df["run"] == run, g].sum()) for g in gens]) for run in runs}
-    return _donuts(runs, lv, config.GEN_COLOURS, "MWh", "<b>%s</b><br>MWh")
+    out = {}
+    for run in df["run"].unique():
+        r = df[df["run"] == run]
+        labels, vals = list(gens), [float(r[g].sum()) for g in gens]
+        if run in metrics.battery_runs() and "bat_discharge" in r.columns:
+            labels.append(metrics.BATTERY)
+            vals.append(float(r["bat_discharge"].sum()))
+        out[run] = (labels, vals)
+    return out
+
+
+def _share_pie(df, gens):
+    lv = share_values(df, gens)
+    return _donuts(list(lv), lv, config.GEN_COLOURS_WITH_BATTERY, "MWh", "<b>%s</b><br>MWh", label_all=True)
 
 
 def _setter_pie(df, params):
@@ -216,7 +259,7 @@ def _setter_pie(df, params):
         d = D.price_setter(df[df["run"] == run], params[run])
         d = d[d["hours"] > 0]
         lv[run] = (list(d["setter"]), [int(h) for h in d["hours"]])
-    return _donuts(runs, lv, SETTER_COLOURS, "hours", "<b>%s</b><br>hours")
+    return _donuts(runs, lv, SETTER_COLOURS, "hours", "<b>%s</b><br>hours", label_all=True)
 
 
 def _figure(key, df, params, gens):
@@ -231,9 +274,12 @@ def _figure(key, df, params, gens):
         return _setter_pie(df, params)
     if key == "cost":
         d = metrics.cost_breakdown(df)
-        d = d[d["gen"].isin(gens)]
-        fig = px.bar(d, x="run", y="cost", color="gen", color_discrete_map=cmap,
+        d = d[d["gen"].isin(list(gens) + [metrics.BATTERY])]
+        fig = px.bar(d, x="run", y="cost", color="gen", color_discrete_map=config.GEN_COLOURS_WITH_BATTERY,
                      labels={"cost": "$", "run": ""})
+        for tr in fig.data:
+            if tr.name == metrics.BATTERY:  # zero-height bar: label it so it's visible
+                tr.update(text=["$0"] * len(tr.x), textposition="outside", cliponaxis=False)
     else:
         d = metrics.capacity_factor(df)
         d = d[d["gen"].isin(gens)]
@@ -251,7 +297,39 @@ def _windowed(scenario, start, hours, caps=None):
     return w, params
 
 
+BAT_KPIS = [("charged", "Charged (MWh)", "{:,.0f}"), ("discharged", "Discharged (MWh)", "{:,.0f}"),
+            ("losses", "Losses (MWh)", "{:,.0f}"), ("cycles", "Equivalent full cycles", "{:.1f}"),
+            ("peak_soc", "Peak SOC (MWh)", "{:,.0f}"), ("charge_hours", "Charging hours", "{:d}"),
+            ("discharge_hours", "Discharging hours", "{:d}")]
+
+
+def battery_tiles(df, caps=None):
+    keys = [k for k, s in config.SCENARIOS.items() if "battery" in s]
+    runs = {config.scenario_label(k): k for k in keys}
+    present = [r for r in df["run"].unique() if r in runs] if not df.empty else []
+    if not present:
+        return html.Div("Select the Batteries scenario (or All) to see battery results.", className="text-muted")
+    out = []
+    for run in present:
+        bat = loader.load_bat_params(runs[run], caps=caps)
+        s = metrics.battery_summary(df[df["run"] == run], bat)
+        out.append(html.Div("%s - %s MWh, %s MW, charge eff %.2f, discharge eff %.2f (round trip %.0f%%)" % (
+            run, "{:,.0f}".format(bat["cap"]), "{:,.0f}".format(bat["power"]), bat["charg_eff"],
+            bat["discharge_eff"], 100 * bat["charg_eff"] * bat["discharge_eff"]), className="small text-muted mb-1"))
+        out.append(dbc.Row([dbc.Col(dbc.Card(dbc.CardBody([
+            html.Div(lab, className="text-muted small text-uppercase"),
+            html.Div(fmt.format(s[k]), style={"fontSize": "1.4rem", "fontWeight": 600,
+                                              "color": config.BAT_COLOURS["soc"]}),
+        ], className="py-2")), xs=6, md=3, lg=True, className="mb-2") for k, lab, fmt in BAT_KPIS]))
+    return html.Div(out)
+
+
 def register_callbacks(app):
+    @app.callback(Output("s-battery", "children"), *GLOBAL_INPUTS)
+    def battery(scenario, start, hours, gens, caps):
+        w, _ = _windowed(scenario, start, hours, caps)
+        return battery_tiles(w, caps)
+
     for key in PLOTS:
         def make(k):
             @app.callback(Output("s-fig-" + k, "figure"), *GLOBAL_INPUTS)

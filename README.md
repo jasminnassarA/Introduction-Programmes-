@@ -11,20 +11,21 @@ This repository has two parts:
 
 ## Quick start
 
-Before you start, you need **Windows**, **GAMS 25.1 with a MOSEK license** and **Python 3.6**.
+Before you start, you need **Windows** and **GAMS 25.1 with a MOSEK license** (in `C:\GAMS\win64\25.1`, or set `GAMS_DIR`).
 
 ```powershell
 git clone https://github.com/jasminnassarA/Introduction-Programmes-.git
 cd Introduction-Programmes-
 git checkout AI-Dashboard
-
-py -3.6 -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-
-.venv\Scripts\python -m dashboard.app
 ```
 
-Then open **http://127.0.0.1:8050** in your browser.
+Then **double-click `setup_and_run.bat`**. It:
+
+1. Finds Python 3.6–3.9 (Python 3.6 preferred, since GAMS 25.1's Python API only supports 3.6). If none is installed it installs Python 3.9.13 for the current user (winget, or the python.org installer).
+2. Creates `.venv` and installs `requirements.txt` (only again when that file changes).
+3. Installs the GAMS Python API into `.venv` and opens **http://127.0.0.1:8050** in your browser.
+
+Close the window to stop the dashboard. To re-solve all models, double-click `run_models.bat`.
 
 Pre-computed results are included in `Results/`, so the dashboard shows data straight away. You only need GAMS to run the models yourself or to use the **Run models** button.
 
@@ -74,18 +75,23 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 .
 ├── README.md
 ├── requirements.txt              Python dependencies
+├── setup_and_run.bat             One-click install + launch of the dashboard
+├── run_models.bat                Re-solve all models (listings -> outputs\)
 ├── .gitignore
 │
-├── My_First_DM.gms               Base-case model
-├── RenewbaleInt.gms              Renewable intermittency model
-├── DM_w_ramping.gms              Ramping model
-├── My_First_DM.lst               GAMS listing files (solver logs); read by the
-├── RenewbaleInt.lst              dashboard's Diagnostics page
-├── DM_w_ramping.lst
+├── models/
+│   ├── My_First_DM.gms           Base-case model
+│   ├── RenewbaleInt.gms          Renewable intermittency model
+│   ├── DM_w_ramping.gms          Ramping model
+│   └── Adding_Batteries.gms      Ramping + battery storage model
+│
+├── outputs/                      GAMS listing files (solver logs); read by the
+│   └── *.lst                     dashboard's Diagnostics page
 │
 ├── Inputs/
 │   ├── base_case.csv             Generator data, base case
 │   ├── Renewable_intermit.csv    Generator data incl. Wind and ramp parameters
+│   ├── Battery_in.csv            Battery size, power and efficiencies
 │   ├── demand(in).csv            Hourly demand (744 h)
 │   ├── normalisedloads.csv       Hourly availability factors per generator
 │   ├── base_case.gdx             GDX copies of the generator data
@@ -94,7 +100,8 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 ├── Results/
 │   ├── My_First_DM_results.gdx   Base-case results
 │   ├── Renewable_intermit.gdx    Renewable-scenario results
-│   └── ramping.gdx               Ramping-scenario results
+│   ├── ramping.gdx               Ramping-scenario results (+ PlantCost, TOTCost)
+│   └── Batteries.gdx             Battery-scenario results (+ PlantCost, TOTCost)
 │
 └── dashboard/
     ├── app.py                    Entry point (Dash app, routing)
@@ -171,12 +178,13 @@ $env:GAMS_DIR = "D:\GAMS\25.1"
 
 ## 5. Running the GAMS models
 
-> Always run the models from the **repository root**. They use relative paths such as `Inputs\...` and `Results\...`.
+> Always run the models from the **repository root** (they use relative paths such as `Inputs\...` and `Results\...`) and send the listing to `outputs\`. `run_models.bat` does this for all four models.
 
 ```powershell
-gams My_First_DM.gms
-gams RenewbaleInt.gms
-gams DM_w_ramping.gms
+gams models\My_First_DM.gms o=outputs\My_First_DM.lst
+gams models\RenewbaleInt.gms o=outputs\RenewbaleInt.lst
+gams models\DM_w_ramping.gms o=outputs\DM_w_ramping.lst
+gams models\Adding_Batteries.gms o=outputs\Adding_Batteries.lst
 ```
 
 (Use the full path, for example `C:\GAMS\win64\25.1\gams.exe`, if `gams` is not on your `PATH`.)
@@ -185,7 +193,7 @@ Each run:
 
 1. Converts the input CSVs to GDX (with `csv2gdx`).
 2. Solves the LP with MOSEK.
-3. Writes the results to `Results\*.gdx` and the solver log to `<model>.lst`.
+3. Writes the results to `Results\*.gdx` and the solver log to `outputs\<model>.lst`.
 4. Also writes `Results\*.xlsx` with `gdxxrw`. This step needs Excel; skip it with `--noxlsx=1`.
 
 | Model | Inputs | Output |
@@ -208,7 +216,7 @@ Each run:
 Example: double the Solar capacity and skip the Excel output.
 
 ```powershell
-gams RenewbaleInt.gms --solarCap=1000 --noxlsx=1
+gams models\RenewbaleInt.gms o=outputs\RenewbaleInt.lst --solarCap=1000 --noxlsx=1
 ```
 
 ---
@@ -256,7 +264,8 @@ The dashboard reads:
 
 - `Results\*.gdx` for the results.
 - `Inputs\*` for the generator data, demand and load factors.
-- The `*.lst` files for the Diagnostics page.
+- The `outputs\*.lst` files for the Diagnostics page.
+- For the ramping and battery scenarios, generator costs come straight from the GAMS `PlantCost` variable in the results GDX (so totals equal `TOTCost`).
 
 ---
 

@@ -90,7 +90,7 @@ def test_price_setter_and_capacity(params):
                       "demand": [400, 550, 800, 600], "Solar": [400, 500, 500, 500],
                       "Coal": [0, 50, 100, 100], "Gas": [0, 0, 200, 0]})
     d = D.price_setter(w, params).set_index("setter")["hours"].to_dict()
-    assert d == {"Solar": 1, "Coal": 1, "Gas": 1, D.OTHER: 1}
+    assert d == {"Solar": 1, "Coal": 2, "Gas": 1}  # hour 4: all at limit -> most expensive running (Coal)
     summ, per = D.capacity_checks(w, params)
     assert summ["peak_demand"] == 800 and summ["adequate"]
     assert per.set_index("gen")["hours_at_cap"].to_dict() == {"Solar": 3, "Coal": 2, "Gas": 0}
@@ -120,3 +120,14 @@ def test_diagnostics_layout_has_all_sections():
         assert "d-" + k in ids
     assert len(diagnostics.SECTIONS) == 8
     assert "objective" not in dict(diagnostics.SECTIONS) and "compare" not in dict(diagnostics.SECTIONS)
+
+
+def test_price_setter_ramp_and_battery(params):
+    # h1 ramp-shifted Gas (43.6, Gas partly loaded); h2 battery charging while Gas marginal;
+    # h3 all gens at limit + battery discharging -> credited to Gas (charging-hour setter)
+    w = pd.DataFrame({"T": [1, 2, 3], "price": [43.6, 41.6, 37.54], "demand": [700, 650, 650],
+                      "Solar": [500, 500, 500], "Coal": [100, 100, 100], "Gas": [100, 300, 0],
+                      "avail_Solar": 500.0, "avail_Coal": 100.0, "avail_Gas": [600.0, 600.0, 0.0],
+                      "bat_charge": [0, 250, 0], "bat_discharge": [0, 0, 50]})
+    d = D.price_setter(w, params).set_index("setter")["hours"].to_dict()
+    assert d == {"Solar": 0, "Coal": 0, "Gas": 3} and "Battery" not in d

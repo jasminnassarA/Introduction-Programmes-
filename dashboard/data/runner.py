@@ -50,8 +50,33 @@ def scenario_gens(key, root=None):
         return []
 
 
+def _bat_csv(root=None):
+    """Base battery values {BatCap: .., ...} from the first scenario that has a battery csv."""
+    for sc in config.SCENARIOS.values():
+        if "battery" not in sc:
+            continue
+        try:
+            df = pd.read_csv(_root(root) / sc["battery"], skipinitialspace=True)
+            df.columns = [c.strip() for c in df.columns]
+            row = df.iloc[0]
+            return {k: _round(k, float(str(row[col]).strip())) for k, (col, _, _) in config.BAT_PARAMS.items()}
+        except Exception:
+            continue
+    return {}
+
+
+def _round(name, v):
+    dec = config.BAT_PARAMS[name][2] if name in config.BAT_PARAMS else 0
+    return int(round(v)) if dec == 0 else round(v, dec)
+
+
+def has_battery(key):
+    return "battery" in config.SCENARIOS[key]
+
+
 def default_caps(root=None):
-    """Base capacity per generator: base_case.csv first, then the other scenarios' csvs (Wind)."""
+    """Base capacity per generator: base_case.csv first, then the other scenarios' csvs (Wind).
+    Battery settings come from Battery_in.csv."""
     caps = {}
     for key in [config.DEFAULT_SCENARIO] + [k for k in config.SCENARIOS if k != config.DEFAULT_SCENARIO]:
         try:
@@ -59,7 +84,9 @@ def default_caps(root=None):
                 caps.setdefault(g, c)
         except Exception:
             continue
-    return {g: caps.get(g, 0) for g in config.CAP_GENERATORS}
+    out = {g: caps.get(g, 0) for g in config.CAP_GENERATORS}
+    out.update(_bat_csv(root))
+    return out
 
 
 def cap_options(gen, root=None):
@@ -68,11 +95,11 @@ def cap_options(gen, root=None):
 
 
 def normalize(caps, root=None):
-    """Full {gen: int MW} dict; None / missing entries -> base value."""
+    """Full {name: value} dict; None / missing entries -> base value."""
     out = default_caps(root)
     for g, v in (caps or {}).items():
         if g in out and v is not None:
-            out[g] = int(round(float(v)))
+            out[g] = _round(g, float(v))
     return out
 
 
@@ -81,9 +108,19 @@ def is_default(caps, root=None):
 
 
 def changed_caps(key, caps, root=None):
-    """Capacities that differ from base and exist in this scenario's model."""
+    """Settings that differ from base and exist in this scenario's model."""
     base, full, gens = default_caps(root), normalize(caps, root), scenario_gens(key, root)
-    return {g: full[g] for g in config.CAP_GENERATORS if g in gens and full[g] != base[g]}
+    out = {g: full[g] for g in config.CAP_GENERATORS if g in gens and full[g] != base[g]}
+    if has_battery(key):
+        out.update({b: full[b] for b in config.BAT_PARAMS if b in full and full[b] != base.get(b)})
+    return out
+
+
+def _flag(name, value):
+    if name in config.BAT_PARAMS:
+        _, flag, dec = config.BAT_PARAMS[name]
+        return "--%s=%s" % (flag, ("%d" % value) if dec == 0 else ("%.*f" % (dec, value)))
+    return "--%sCap=%d" % (name.lower(), value)
 
 
 def cache_key(caps, root=None):
@@ -103,7 +140,7 @@ def gams_command(key, caps, tmpdir, root=None):
     # Paths relative to ROOT (the cwd): GAMS rejects arguments containing spaces ("Intro to GAMs").
     rel = Path(tmpdir).relative_to(_root(root))
     cmd = [config.GAMS_EXE, str(config.SCENARIOS[key]["gms"])]
-    cmd += ["--%sCap=%d" % (g.lower(), c) for g, c in changed_caps(key, caps, root).items()]
+    cmd += [_flag(g, c) for g, c in changed_caps(key, caps, root).items()]
     cmd += ["--outdir=%s" % rel, "--noxlsx=1", "o=%s" % (rel / Path(config.SCENARIOS[key]["lst"]).name), "lo=0"]
     return cmd
 
@@ -113,8 +150,13 @@ def _model_status(text):
     return int(m[-1]) if m else None
 
 
+BAT_LABELS = {"BatCap": "Battery %d MWh", "BatPower": "%d MW", "BatChEff": "charge eff %.2f",
+              "BatDisEff": "discharge eff %.2f"}
+
+
 def _caps_label(caps, root=None):
-    return ", ".join("%s %d MW" % (g, c) for g, c in normalize(caps, root).items())
+    return ", ".join((BAT_LABELS[g] % c) if g in BAT_LABELS else "%s %d MW" % (g, c)
+                     for g, c in normalize(caps, root).items())
 
 
 def run_scenario(key, caps, tmpdir, root=None):
@@ -132,7 +174,8 @@ def run_scenario(key, caps, tmpdir, root=None):
         tail = "\n".join(text.splitlines()[-15:]) or (getattr(proc, "stderr", "") or "")[-1000:]
         raise GamsRunError("GAMS failed for %s at %s (return code %s, model status %s).\n%s"
                            % (config.scenario_label(key), _caps_label(caps, root), proc.returncode, status, tail))
-    return {"results": loader.read_results_gdx(res), "lst": text}
+    return {"results": loader.read_results_gdx(res), "plant_cost": loader.read_plant_cost_gdx(res),
+            "lst": text}
 
 
 def run_all(caps, root=None):
