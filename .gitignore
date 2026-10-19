@@ -1,0 +1,24 @@
+# --- GAMS scratch / temporary runs ---
+225*/
+.tmp_run_*/
+*.~gm
+
+# --- Python / tooling ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+
+# --- Generated / unused outputs ---
+Results/*.xlsx
+Inputs/load_factor.gdx
+Inputs/demand(in).gdx
+Inputs/normalisedloads.gdx
+Inputs/renewable_intermit.gdx
+# Keep the generator data GDX read by the dashboard (Windows is case-insensitive)
+!Inputs/Renewable_intermit.gdx
+
+# --- Not required ---
+dashboard/PLAN.md
+intro_gams/
