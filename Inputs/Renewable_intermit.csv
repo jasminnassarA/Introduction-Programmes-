@@ -1,5 +1,5 @@
-gen,cost,cap,eff,vom
-Solar,0,500,1,1
-Coal,7.8,100,0.4,2
-Gas,19.8 ,600,0.5,2
-Wind,0,500,1,0.5
+gen,cost,cap,eff,vom,ramp_L,ramp_cost
+Solar,0,500,1,1,1,0
+Coal,7.8,100,0.4,2,0.2,5
+Gas,19.8 ,600,0.5,2,0.5,1
+Wind,0,500,1,0.5,1,0

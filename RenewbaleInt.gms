@@ -32,6 +32,13 @@ $gdxin Inputs\Renewable_intermit.gdx
 $load data = data_in
 $gdxin
 
+* Optional overrides passed from the dashboard (defaults keep the original behaviour)
+$if not set outdir $set outdir Results
+$if set solarCap data('Solar','cap') = %solarCap%;
+$if set coalCap data('Coal','cap') = %coalCap%;
+$if set gasCap data('Gas','cap') = %gasCap%;
+$if set windCap data('Wind','cap') = %windCap%;
+
 
 * Assigning cost for each generator based on the excel input
 $call csv2gdx Inputs\demand(in).csv id=d index =1 values =2 useHeader=y output=Inputs\demand(in).gdx
@@ -90,9 +97,9 @@ ExcelResults(T,'Coal') = U.L('Coal',T);
 ExcelResults(T,'Gas') = U.L('Gas',T);
 ExcelResults(T,'Wind') = U.L('Wind',T);
 
-execute_unload 'Results\Renewable_intermit.gdx', ExcelResults;
+execute_unload '%outdir%\Renewable_intermit.gdx', ExcelResults;
 
-execute 'gdxxrw Results\Renewable_intermit.gdx output=Results\Renewable_intermit.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
+$if not set noxlsx execute 'gdxxrw %outdir%\Renewable_intermit.gdx output=%outdir%\Renewable_intermit.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
 
 
 *dont run results if infesabile 

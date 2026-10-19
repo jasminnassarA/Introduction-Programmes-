@@ -1,23 +1,19 @@
-"""Sidebar: global run selector, snapshot controls, navigation."""
+"""Sidebar: scenario selector, hour window, generator filter, navigation."""
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from dashboard import config
-from dashboard.data import access, metrics, versions
+from dashboard.data import access, runner
 
 
-def run_options():
-    opts = []
-    for label, path in versions.list_runs():
-        if label == config.CURRENT:
-            opts.append({"label": "Current (repo root)", "value": label})
-        else:
-            note = versions.read_meta(path).get("note", "")
-            opts.append({"label": label + (" - " + note if note else ""), "value": label})
+def scenario_options():
+    opts = [{"label": s["label"], "value": k} for k, s in config.SCENARIOS.items()]
+    opts.append({"label": "All (compare)", "value": config.BOTH})
     return opts
 
 
 def layout():
+    base = runner.default_caps()
     return html.Div(
         [
             html.H4("Dispatch Model", className="mb-3"),
@@ -29,38 +25,38 @@ def layout():
                 ],
                 vertical=True, pills=True, className="mb-4",
             ),
-            html.Label("Runs to display", className="fw-bold"),
-            dcc.Dropdown(id="run-select", options=run_options(), value=[config.CURRENT],
-                         multi=True, clearable=False, persistence=True),
-            dcc.Store(id="run-store", data=[config.CURRENT]),
+            html.Label("Scenario", className="fw-bold"),
+            dcc.Dropdown(id="scenario", options=scenario_options(), value=config.DEFAULT_SCENARIO,
+                         clearable=False, persistence=True),
+            html.Label("Capacities (MW)", className="fw-bold mt-3"),
+            *[html.Div([
+                html.Span(g, className="small", style={"width": "3.5rem"}),
+                html.Div(dcc.Dropdown(id="cap-" + g.lower(), options=[{"label": str(c), "value": c}
+                                                                      for c in runner.cap_options(g)],
+                                      value=base[g], clearable=False), style={"flex": 1}),
+            ], className="d-flex align-items-center mb-1") for g in config.CAP_GENERATORS],
+            html.Div("Wind applies to the renewable and ramping scenarios only.", className="small text-muted"),
+            dbc.Button("Run models", id="run-models", color="primary", size="sm", className="mt-2 w-100"),
+            dcc.Store(id="caps", data=base),
+            dcc.Loading(html.Div(id="run-status", className="small text-muted mt-1",
+                                 style={"whiteSpace": "pre-wrap"}), type="dot"),
             html.Hr(),
-            html.Label("Days shown", className="fw-bold"),
-            dcc.Slider(id="days", min=access.MIN_DAYS, max=access.MAX_DAYS, step=1,
-                       value=config.WINDOW_DAYS, persistence=True,
-                       marks={d: str(d) for d in (1, 7, 14, 21, 28, 35)},
+            html.Label("Hours shown", className="fw-bold"),
+            dcc.Slider(id="hours", min=access.MIN_HOURS, max=access.MAX_HOURS, step=24,
+                       value=config.WINDOW_HOURS, persistence=True,
+                       marks={h: str(h) for h in (24, 168, 336, 504, 744)},
                        tooltip={"placement": "bottom", "always_visible": True}),
-            html.Label("Start date", className="fw-bold mt-4"),
+            html.Label("Start hour", className="fw-bold mt-4"),
             html.Div([
-                dbc.Button("<", id="date-prev", outline=True, size="sm", className="me-1"),
-                dcc.DatePickerSingle(id="date-start", display_format="YYYY-MM-DD", persistence=True),
-                dbc.Button(">", id="date-next", outline=True, size="sm", className="ms-1"),
+                dbc.Button("<", id="hour-prev", outline=True, size="sm", className="me-1"),
+                dcc.Input(id="hour-start", type="number", min=1, step=1, value=1, debounce=True,
+                          persistence=True, style={"width": "6rem"}),
+                dbc.Button(">", id="hour-next", outline=True, size="sm", className="ms-1"),
             ], className="d-flex align-items-center"),
-            html.Div(id="date-range", className="small text-muted mt-1"),
-            html.Label("Aggregation", className="fw-bold mt-3"),
-            dbc.RadioItems(id="freq", value="M", inline=True, persistence=True,
-                           options=[{"label": v, "value": k} for k, v in metrics.FREQS.items()]),
+            html.Div(id="hour-range", className="small text-muted mt-1"),
             html.Label("Generators", className="fw-bold mt-3"),
             dbc.Checklist(id="gens", value=list(config.GENERATORS), inline=True, persistence=True,
                           options=[{"label": g, "value": g} for g in config.GENERATORS]),
-            html.Hr(),
-            html.Label("Save current outputs as...", className="fw-bold"),
-            dbc.Input(id="snap-label", placeholder="label e.g. base_v1", className="mb-2"),
-            dbc.Input(id="snap-note", placeholder="note (optional)", className="mb-2"),
-            dbc.Checkbox(id="snap-force", label="Overwrite if exists", value=False),
-            dbc.Button("Save snapshot", id="snap-btn", color="primary", size="sm", className="mt-2"),
-            html.Div(id="snap-status", className="small mt-2"),
-            html.Hr(),
-            html.Div("Hour 1 = " + str(config.START_DATETIME), className="small text-muted"),
         ],
         style={"position": "fixed", "top": 0, "left": 0, "bottom": 0, "width": "18rem",
                "padding": "1.5rem 1rem", "backgroundColor": "#f8f9fa", "overflowY": "auto"},

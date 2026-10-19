@@ -75,15 +75,33 @@ def parse_equ_marginals(text, name):
     return pd.DataFrame(rows, columns=cols)
 
 
-@lru_cache(maxsize=16)
-def _load_cached(path, mtime):
-    text = Path(path).read_text(errors="ignore")
+def _parse(text):
     return parse_summary(text), parse_equ_marginals(text, "Qcap")
 
 
-def load_lst(run_dir):
-    """(summary dict, Qcap DataFrame) for a run dir, or None if no .lst. Cached on mtime."""
-    p = Path(run_dir) / config.LST_FILE
+@lru_cache(maxsize=16)
+def _load_cached(path, mtime):
+    return _parse(Path(path).read_text(errors="ignore"))
+
+
+def load_lst(key, root=None, caps=None):
+    """(summary dict, Qcap DataFrame) for a scenario key, or None if no listing.
+
+    Base capacities: the .lst file in ROOT (cached on mtime).  Otherwise the listing text kept in
+    memory from the temporary GAMS run (never runs GAMS itself).
+    """
+    from dashboard.data import runner
+
+    if not runner.is_default(caps, root):
+        entry = runner.cached_results(caps, root)
+        if entry is None:
+            return None
+        item = entry[key]
+        if "lst_parsed" not in item:
+            item["lst_parsed"] = _parse(item["lst"])
+        s, q = item["lst_parsed"]
+        return dict(s), q.copy()
+    p = runner.lst_path(key, root)
     if not p.exists():
         return None
     s, q = _load_cached(str(p), p.stat().st_mtime)

@@ -31,6 +31,13 @@ $gdxin Inputs\Renewable_intermit.gdx
 $load data = data_in
 $gdxin
 
+* Optional overrides passed from the dashboard (defaults keep the original behaviour)
+$if not set outdir $set outdir Results
+$if set solarCap data('Solar','cap') = %solarCap%;
+$if set coalCap data('Coal','cap') = %coalCap%;
+$if set gasCap data('Gas','cap') = %gasCap%;
+$if set windCap data('Wind','cap') = %windCap%;
+
 
 * Assigning cost for each generator based on the excel input
 $call csv2gdx Inputs\demand(in).csv id=d index =1 values =2 useHeader=y output=Inputs\demand(in).gdx
@@ -74,12 +81,12 @@ QRamp_D(gen,T)   Equation for ramp down for each generator and hour
 
 ;
 
+*this means that the equation only applies for time periods greater than 1 so that ramping up from 0 isnt considered
+QVol_ramp_U(gen,T)$(ord(T)>1).. Ramp_U(gen,T) =g= U(gen,T) - U(gen,T-1); #MWh
+QVol_ramp_D(gen,T)$(ord(T)>1).. Ramp_D(gen,T) =g= U(gen,T-1) - U(gen,T); #MWh
 
-QVol_ramp_U(gen,T).. Ramp_U(gen,T) =g= U(gen,T) - U(gen,T-1); #MWh
-QVol_ramp_D(gen,T).. Ramp_D(gen,T) =g= U(gen,T-1) - U(gen,T); #MWh
-
-QRamp_U(gen,T).. Ramp_U(gen,T) =l= Ramp(gen,T); #MWh
-QRamp_D(gen,T).. Ramp_D(gen,T) =l= Ramp(gen,T); #MWh
+QRamp_U(gen,T)$(ord(T)>1).. Ramp_U(gen,T) =l= Ramp(gen,T); #MWh
+QRamp_D(gen,T)$(ord(T)>1).. Ramp_D(gen,T) =l= Ramp(gen,T); #MWh
 
 Qcap(gen,T)..	U(gen,T) =l=data(gen,'cap')*Load_factor(T,gen); #MWh
 QDemand(T)..	 sum(gen, U(gen,T)) =E= PRD_DATA(T); #MWh 
@@ -103,9 +110,9 @@ ExcelResults(T,'Coal') = U.L('Coal',T);
 ExcelResults(T,'Gas') = U.L('Gas',T);
 ExcelResults(T,'Wind') = U.L('Wind',T);
 
-execute_unload 'Results\ramping.gdx', ExcelResults;
+execute_unload '%outdir%\ramping.gdx', ExcelResults;
 
-execute 'gdxxrw Results\ramping.gdx output=Results\ramping.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
+$if not set noxlsx execute 'gdxxrw %outdir%\ramping.gdx output=%outdir%\ramping.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
 
 
 *dont run results if infesabile

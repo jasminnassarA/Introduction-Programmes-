@@ -31,6 +31,12 @@ $gdxin Inputs\base_case.gdx
 $load data = data_in
 $gdxin
 
+* Optional overrides passed from the dashboard (defaults keep the original behaviour)
+$if not set outdir $set outdir Results
+$if set solarCap data('Solar','cap') = %solarCap%;
+$if set coalCap data('Coal','cap') = %coalCap%;
+$if set gasCap data('Gas','cap') = %gasCap%;
+
 
 * Assigning cost for each generator based on the excel input
 $call csv2gdx Inputs\demand(in).csv id=d index =1 values =2 useHeader=y output=Inputs\demand(in).gdx
@@ -81,8 +87,8 @@ ExcelResults(T,'Solar') = U.L('Solar',T);
 ExcelResults(T,'Coal') = U.L('Coal',T);
 ExcelResults(T,'Gas') = U.L('Gas',T);
 
-execute_unload 'Results\My_First_DM_results.gdx', ExcelResults;
+execute_unload '%outdir%\My_First_DM_results.gdx', ExcelResults;
 
-execute 'gdxxrw Results\My_First_DM_results.gdx output=Results\My_First_DM_results.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
+$if not set noxlsx execute 'gdxxrw %outdir%\My_First_DM_results.gdx output=%outdir%\My_First_DM_results.xlsx squeeze=n par=ExcelResults rng=Hourly!A1';
 
 *dont run results if infesabile 

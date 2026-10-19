@@ -1,12 +1,11 @@
 """Dash entry point: python -m dashboard.app  ->  http://127.0.0.1:8050"""
 import dash
 import dash_bootstrap_components as dbc
-import pandas as pd
 from dash import Input, Output, State, callback_context, dcc, html
 
 from dashboard import config
 from dashboard.components import sidebar
-from dashboard.data import access, versions
+from dashboard.data import access, runner
 from dashboard.pages import diagnostics, granular, summary
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
@@ -15,7 +14,8 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
 app.layout = html.Div([
     dcc.Location(id="url"),
     sidebar.layout(),
-    html.Div(id="page", style={"marginLeft": "19rem", "padding": "1.5rem"}),
+    dcc.Loading(html.Div(id="page", style={"marginLeft": "19rem", "padding": "1.5rem"}),
+                type="circle", fullscreen=False),
 ])
 
 
@@ -28,59 +28,56 @@ def route(path):
     return granular.layout()
 
 
-@app.callback(Output("run-store", "data"), Input("run-select", "value"))
-def sync_runs(value):
-    return value or [config.CURRENT]
+@app.callback(
+    Output("caps", "data"), Output("run-status", "children"),
+    Input("run-models", "n_clicks"),
+    [State("cap-" + g.lower(), "value") for g in config.CAP_GENERATORS],
+    prevent_initial_call=True,
+)
+def run_models(_n, *values):
+    """Solve the chosen capacities (in memory, nothing saved) and apply them to every page."""
+    caps = runner.normalize(dict(zip(config.CAP_GENERATORS, values)))
+    try:
+        runner.get_results(caps)
+    except (runner.GamsRunError, OSError) as e:
+        return dash.no_update, "Error: %s" % e
+    return caps, runner.last_status
 
 
 @app.callback(
-    Output("date-start", "date"), Output("date-start", "min_date_allowed"),
-    Output("date-start", "max_date_allowed"),
-    Input("run-store", "data"), Input("date-prev", "n_clicks"), Input("date-next", "n_clicks"),
-    Input("days", "value"),
-    State("date-start", "date"),
+    Output("hour-start", "value"), Output("hour-start", "max"),
+    Input("scenario", "value"), Input("hour-prev", "n_clicks"), Input("hour-next", "n_clicks"),
+    Input("hours", "value"), Input("caps", "data"),
+    State("hour-start", "value"),
 )
-def set_start(runs, _p, _n, days, current):
-    days = access.clamp_days(days)
-    df, _ = access.load_selected(runs)
+def set_start(scenario, _p, _n, hours, caps, current):
+    hours = access.clamp_hours(hours)
+    df, _ = access.load_selected(scenario, caps)
     if df.empty:
-        return None, None, None
-    lo = df["datetime"].min().normalize()
-    hi = max(lo, df["datetime"].max().normalize() - pd.Timedelta(days=days - 1))
-    cur = pd.Timestamp(current) if current else lo
+        return 1, 1
+    max_t = int(df["T"].max())
+    cur = current or 1
     trig = callback_context.triggered[0]["prop_id"].split(".")[0] if callback_context.triggered else ""
-    step = pd.Timedelta(days=days)
-    if trig == "date-prev":
-        cur -= step
-    elif trig == "date-next":
-        cur += step
-    cur = min(max(cur, lo), hi)
-    return cur.date().isoformat(), lo.date().isoformat(), hi.date().isoformat()
+    if trig == "hour-prev":
+        cur -= hours
+    elif trig == "hour-next":
+        cur += hours
+    hi = max(1, max_t - hours + 1)
+    return access.clamp_start(cur, hours, max_t), hi
 
 
-@app.callback(Output("date-range", "children"),
-              Input("date-start", "date"), Input("days", "value"), Input("run-store", "data"))
-def show_range(start, days, runs):
-    df, _ = access.load_selected(runs)
-    if df.empty or not start:
+@app.callback(Output("hour-range", "children"),
+              Input("hour-start", "value"), Input("hours", "value"), Input("scenario", "value"),
+              Input("caps", "data"))
+def show_range(start, hours, scenario, caps):
+    df, _ = access.load_selected(scenario, caps)
+    if df.empty:
         return ""
-    _, s, last = access.filter_window(df, start, days)
+    _, s, last = access.filter_window(df, start, hours)
     return access.range_label(s, last)
 
 
-@app.callback(
-    Output("snap-status", "children"), Output("run-select", "options"),
-    Input("snap-btn", "n_clicks"),
-    State("snap-label", "value"), State("snap-note", "value"), State("snap-force", "value"),
-    prevent_initial_call=True,
-)
-def save_snapshot(_n, label, note, force):
-    try:
-        dest = versions.snapshot(label, note or "", bool(force))
-        msg = html.Span("Saved to " + str(dest), className="text-success")
-    except Exception as e:  # show any error to the user
-        msg = html.Span(str(e), className="text-danger")
-    return msg, sidebar.run_options()
+runner.cleanup_tmp()
 
 
 granular.register_callbacks(app)

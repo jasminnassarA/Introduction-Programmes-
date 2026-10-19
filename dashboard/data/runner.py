@@ -1,0 +1,183 @@
+"""Run the GAMS models for a chosen set of generator capacities - results are never saved to disk.
+
+caps is a dict {gen: MW} for config.CAP_GENERATORS (missing gens = base value from the input csvs).
+- All capacities at base: the original Results/ files are used and GAMS never runs.
+- Otherwise every scenario is solved in a temporary folder inside ROOT, the results gdx and .lst are
+  read into memory and the folder is deleted (also on failure).  Results are kept in memory for the
+  rest of the dashboard session only, so picking the same combination again doesn't re-run GAMS.
+- Wind only exists in the renewable / ramping models: the base case ignores the Wind capacity.
+"""
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from collections import OrderedDict
+from pathlib import Path
+
+import pandas as pd
+
+from dashboard import config
+
+_LOCK = threading.Lock()
+_STATUS_RE = re.compile(r"\*\*\*\* MODEL STATUS\s+(\d+)")
+OK_MODEL_STATUS = {1, 2}  # optimal / locally optimal
+
+last_status = ""  # human readable summary of the last run (shown in the sidebar)
+_CACHE = OrderedDict()  # caps key -> {scenario key: {"results": long df, "lst": text}}
+
+
+class GamsRunError(RuntimeError):
+    pass
+
+
+def _root(root=None):
+    return Path(root or config.ROOT)
+
+
+def _csv_caps(path):
+    df = pd.read_csv(path, skipinitialspace=True)
+    df.columns = [c.strip() for c in df.columns]
+    return {str(g).strip(): int(float(str(c).strip())) for g, c in zip(df["gen"], df["cap"])}
+
+
+def scenario_gens(key, root=None):
+    """Generators present in a scenario's input csv (e.g. no Wind in the base case)."""
+    try:
+        return list(_csv_caps(_root(root) / config.SCENARIOS[key]["gen_csv"]))
+    except Exception:
+        return []
+
+
+def default_caps(root=None):
+    """Base capacity per generator: base_case.csv first, then the other scenarios' csvs (Wind)."""
+    caps = {}
+    for key in [config.DEFAULT_SCENARIO] + [k for k in config.SCENARIOS if k != config.DEFAULT_SCENARIO]:
+        try:
+            for g, c in _csv_caps(_root(root) / config.SCENARIOS[key]["gen_csv"]).items():
+                caps.setdefault(g, c)
+        except Exception:
+            continue
+    return {g: caps.get(g, 0) for g in config.CAP_GENERATORS}
+
+
+def cap_options(gen, root=None):
+    base = default_caps(root)[gen]
+    return [int(round(base * m)) for m in config.CAP_MULTIPLIERS]
+
+
+def normalize(caps, root=None):
+    """Full {gen: int MW} dict; None / missing entries -> base value."""
+    out = default_caps(root)
+    for g, v in (caps or {}).items():
+        if g in out and v is not None:
+            out[g] = int(round(float(v)))
+    return out
+
+
+def is_default(caps, root=None):
+    return normalize(caps, root) == default_caps(root)
+
+
+def changed_caps(key, caps, root=None):
+    """Capacities that differ from base and exist in this scenario's model."""
+    base, full, gens = default_caps(root), normalize(caps, root), scenario_gens(key, root)
+    return {g: full[g] for g in config.CAP_GENERATORS if g in gens and full[g] != base[g]}
+
+
+def cache_key(caps, root=None):
+    return (str(_root(root)),) + tuple(sorted(normalize(caps, root).items()))
+
+
+def results_path(key, root=None):
+    """Original results gdx for a scenario (base capacities)."""
+    return _root(root) / config.SCENARIOS[key]["results"]
+
+
+def lst_path(key, root=None):
+    return _root(root) / config.SCENARIOS[key]["lst"]
+
+
+def gams_command(key, caps, tmpdir, root=None):
+    # Paths relative to ROOT (the cwd): GAMS rejects arguments containing spaces ("Intro to GAMs").
+    rel = Path(tmpdir).relative_to(_root(root))
+    cmd = [config.GAMS_EXE, str(config.SCENARIOS[key]["gms"])]
+    cmd += ["--%sCap=%d" % (g.lower(), c) for g, c in changed_caps(key, caps, root).items()]
+    cmd += ["--outdir=%s" % rel, "--noxlsx=1", "o=%s" % (rel / Path(config.SCENARIOS[key]["lst"]).name), "lo=0"]
+    return cmd
+
+
+def _model_status(text):
+    m = _STATUS_RE.findall(text or "")
+    return int(m[-1]) if m else None
+
+
+def _caps_label(caps, root=None):
+    return ", ".join("%s %d MW" % (g, c) for g, c in normalize(caps, root).items())
+
+
+def run_scenario(key, caps, tmpdir, root=None):
+    """Solve one scenario in tmpdir; return {"results": long df, "lst": text} or raise GamsRunError."""
+    from dashboard.data import loader
+
+    sc = config.SCENARIOS[key]
+    res = Path(tmpdir) / Path(sc["results"]).name
+    lst = Path(tmpdir) / Path(sc["lst"]).name
+    proc = subprocess.run(gams_command(key, caps, tmpdir, root), cwd=str(_root(root)),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    text = lst.read_text(errors="ignore") if lst.exists() else ""
+    status = _model_status(text)
+    if proc.returncode != 0 or not res.exists() or status not in OK_MODEL_STATUS:
+        tail = "\n".join(text.splitlines()[-15:]) or (getattr(proc, "stderr", "") or "")[-1000:]
+        raise GamsRunError("GAMS failed for %s at %s (return code %s, model status %s).\n%s"
+                           % (config.scenario_label(key), _caps_label(caps, root), proc.returncode, status, tail))
+    return {"results": loader.read_results_gdx(res), "lst": text}
+
+
+def run_all(caps, root=None):
+    """Solve every scenario in a temporary folder that is always deleted afterwards."""
+    tmp = tempfile.mkdtemp(prefix=config.TMP_PREFIX, dir=str(_root(root)))
+    try:
+        return {key: run_scenario(key, caps, tmp, root) for key in config.SCENARIOS}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def cleanup_tmp(root=None):
+    """Remove leftover temporary run folders (e.g. from an interrupted dashboard)."""
+    for d in _root(root).glob(config.TMP_PREFIX + "*"):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def get_results(caps, root=None):
+    """In-memory results for caps (solving if needed), or None for the base capacities."""
+    global last_status
+    if is_default(caps, root):
+        last_status = "Base inputs (Results folder)"
+        return None
+    k = cache_key(caps, root)
+    with _LOCK:
+        if k in _CACHE:
+            _CACHE.move_to_end(k)
+            last_status = "Using results from this session"
+            return _CACHE[k]
+        t0 = time.time()
+        entry = run_all(caps, root)
+        _CACHE[k] = entry
+        while len(_CACHE) > config.RESULT_CACHE_SIZE:
+            _CACHE.popitem(last=False)
+        last_status = "Solved %d model(s) in %.1fs" % (len(entry), time.time() - t0)
+        return entry
+
+
+def cached_results(caps, root=None):
+    """In-memory results if already solved (never runs GAMS); None for base or not yet run."""
+    if is_default(caps, root):
+        return None
+    return _CACHE.get(cache_key(caps, root))
+
+
+def clear_cache():
+    _CACHE.clear()

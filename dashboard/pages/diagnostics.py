@@ -1,31 +1,30 @@
 """Diagnostics page: GAMS solve health (.lst), inputs (base_case.gdx) and capacity/price diagnostics.
 
-Sections 1-5, 9, 10 cover the whole run; 6-8 follow the global date window and generator filter.
+Sections 1-5, 9, 10 cover the whole scenario; 6-8 follow the global hour window and generator filter.
 """
-import datetime as dt
 from pathlib import Path
 
 import dash_bootstrap_components as dbc
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, dash_table, dcc, html
 
 from dashboard import config
-from dashboard.data import access, diagnostics as D, loader, lst_parser, versions
+from dashboard.data import access, diagnostics as D, loader, lst_parser, runner
 
 SECTIONS = [
     ("health", "1. Run health"),
-    ("objective", "2. Objective cross-check (.lst vs recomputed from .gdx + inputs)"),
-    ("size", "3. Model size"),
-    ("inputs", "4. Generator inputs (base_case)"),
-    ("merit", "5. Merit order"),
-    ("capacity", "6. Capacity checks (date window)"),
-    ("capvalue", "7. Capacity value - $ saved per extra MW (Qcap marginals, date window)"),
-    ("setter", "8. Price-setter (date window)"),
-    ("compare", "9. Run comparison"),
-    ("info", "10. Run info"),
+    ("size", "2. Model size"),
+    ("inputs", "3. Generator inputs (ramping scenario)"),
+    ("merit", "4. Merit order"),
+    ("capacity", "5. Capacity checks (hour window)"),
+    ("capvalue", "6. Capacity value - $ saved per extra MW (Qcap marginals, hour window)"),
+    ("setter", "7. Price-setter (hour window)"),
+    ("info", "8. Scenario files"),
 ]
-INPUTS = [Input("run-store", "data"), Input("date-start", "date"), Input("days", "value"), Input("gens", "value")]
+INPUTS = [Input("scenario", "value"), Input("hour-start", "value"), Input("hours", "value"), Input("gens", "value"),
+          Input("caps", "data")]
 
 
 def layout():
@@ -63,11 +62,8 @@ def _run_block(run, children):
     return html.Div([html.H6(run, className="mt-2")] + list(children))
 
 
-def _mtime(p):
-    p = Path(p)
-    if not p.exists():
-        return "missing"
-    return dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+def _exists(p):
+    return "%s%s" % (p, "" if Path(p).exists() else " (missing)")
 
 
 def _note(msg):
@@ -77,7 +73,7 @@ def _note(msg):
 # ---------- sections ----------
 def _health(s):
     if s is None:
-        return _note("No .lst file for this run.")
+        return _note("No .lst file for this scenario.")
     ok_solver, ok_model = s.get("solver_status_code") == 1, s.get("model_status_code") in (1, 2)
     infeas = s.get("infeasible")
     return dbc.Row([
@@ -93,21 +89,33 @@ def _health(s):
     ])
 
 
-def _objective(chk):
-    if chk["objective"] is None:
-        return _note("No objective in .lst - recomputed cost $%s" % _fmt(chk["recomputed"]))
-    return dbc.Row([
-        _stat("Check", "PASS" if chk["ok"] else "FAIL", "success" if chk["ok"] else "danger"),
-        _stat(".lst objective ($)", _fmt(chk["objective"])),
-        _stat("Recomputed ($)", _fmt(chk["recomputed"])),
-        _stat("Difference ($)", _fmt(chk["diff"])),
-        _stat("Difference (%)", _fmt(chk["diff_pct"], "{:.4f}%")),
-    ])
+RAMP_KEY = "ramping"
+
+
+def _ramp_inputs(caps=None):
+    """Generator inputs table for the ramping scenario - shown regardless of the selected scenario."""
+    try:
+        p = loader.load_gen_params(RAMP_KEY, caps=caps)
+        src = loader.gen_params_source(RAMP_KEY).name
+    except Exception as e:  # missing / unreadable input file
+        return [_note("Could not load ramping inputs: %s" % e)]
+    # ramp_cost always comes from Renewable_intermit.csv (the .gdx does not carry it)
+    try:
+        csv = pd.read_csv(loader._path(RAMP_KEY, "gen_csv"), skipinitialspace=True)
+        csv.columns = [c.strip() for c in csv.columns]
+        rc = pd.to_numeric(csv.set_index(csv["gen"].astype(str).str.strip())["ramp_cost"])
+        p = p.assign(ramp_cost=rc.reindex(p.index).fillna(0.0).astype(float))
+    except Exception:
+        if "ramp_cost" not in p.columns:
+            p = p.assign(ramp_cost=0.0)
+    t = D.inputs_table(p)
+    return [_table(t), html.Small("SRMC = vom + cost / eff ($/MWh); ramp_cost in $/MW change. Source: %s" % src,
+                                  className="text-muted")]
 
 
 def _size(s):
     if s is None:
-        return _note("No .lst file for this run.")
+        return _note("No .lst file for this scenario.")
     return dbc.Row([
         _stat("Equation blocks", _fmt(s.get("equation_blocks"), "{:,d}")),
         _stat("Single equations", _fmt(s.get("single_equations"), "{:,d}")),
@@ -148,26 +156,29 @@ def _capacity(run, w, params, gens):
         _stat("Peak demand (MW)", _fmt(summ["peak_demand"], "{:,.1f}")),
         _stat("Min demand (MW)", _fmt(summ["min_demand"], "{:,.1f}")),
         _stat("Total capacity (MW)", _fmt(summ["total_capacity"], "{:,.0f}")),
+        _stat("Min available (MW)", _fmt(summ["min_available"], "{:,.0f}")),
+        _stat("Shortfall hours", _fmt(summ["shortfall_hours"], "{:d}"),
+              "success" if summ["shortfall_hours"] == 0 else "danger"),
         _stat("Reserve margin", _fmt(summ["reserve_margin_pct"], "{:.1f}%"),
               "success" if summ["adequate"] else "danger"),
         _stat("Adequate?", "yes" if summ["adequate"] else "NO", "success" if summ["adequate"] else "danger"),
     ])
     fig = px.bar(per, x="gen", y="hours_at_cap", color="gen", color_discrete_map=config.GEN_COLOURS,
-                 text="hours_at_cap", labels={"hours_at_cap": "Hours at full capacity", "gen": ""})
+                 text="hours_at_cap", labels={"hours_at_cap": "Hours at available capacity", "gen": ""})
     fig.update_layout(showlegend=False, height=260, margin=dict(t=10))
     return _run_block(run, [cards, dcc.Graph(figure=fig), _table(per.round(2))])
 
 
 def _capvalue(run, qcap, w, gens):
     if qcap is None:
-        return _run_block(run, [_note("No .lst file for this run.")])
+        return _run_block(run, [_note("No .lst file for this scenario.")])
     hourly, summ = D.capacity_value(qcap, w, gens)
     fig = go.Figure()
     for g in gens:
         h = hourly[hourly["gen"] == g]
-        fig.add_trace(go.Scatter(x=h["datetime"], y=h["value"], name=g, mode="lines", line_shape="hv",
+        fig.add_trace(go.Scatter(x=h["T"], y=h["value"], name=g, mode="lines", line_shape="hv",
                                  line=dict(color=config.GEN_COLOURS.get(g))))
-    fig.update_layout(yaxis_title="$/MW per hour", hovermode="x unified", height=300, margin=dict(t=10))
+    fig.update_layout(yaxis_title="$/MW per hour", xaxis_title="Hour", hovermode="x unified", height=300, margin=dict(t=10))
     return _run_block(run, [dcc.Graph(figure=fig), _table(summ)])
 
 
@@ -180,76 +191,59 @@ def _setter(run, w, params):
     return _run_block(run, [dcc.Graph(figure=fig)])
 
 
-def _compare_info(params, s, chk):
-    info = {}
-    costs = D.srmc(params)
-    for g in params.index:
-        for f in ("cap", "eff", "vom", "cost"):
-            info["%s %s" % (g, f)] = params.loc[g, f]
-        info[g + " SRMC"] = round(costs[g], 4)
-    s = s or {}
-    info["objective"] = s.get("objective")
-    info["recomputed cost"] = round(chk["recomputed"], 2)
-    info["model status"] = s.get("model_status")
-    info["iterations"] = s.get("iterations")
-    return info
-
-
-def _info(run, path, s):
-    lst = Path(path) / config.LST_FILE
+def _info(run, key, s, caps=None):
+    root = config.ROOT
+    sc = config.SCENARIOS[key]
+    src = loader.gen_params_source(key)
+    full, gens = runner.normalize(caps), runner.scenario_gens(key)
+    cap_text = ", ".join("%s %d" % (g, c) if g in gens else "%s n/a (not in this model)" % g
+                         for g, c in full.items())
+    if runner.is_default(caps):
+        lst, gdx = _exists(runner.lst_path(key)), _exists(runner.results_path(key))
+    else:
+        lst = gdx = "in memory (temporary run, not saved)"
     rows = [
-        ("Run directory", str(path)),
+        ("Scenario folder", str(root)),
+        ("Capacities (MW)", cap_text),
         ("GAMS version", (s or {}).get("gams_version", "n/a")),
-        ("Solve date (from .lst)", (s or {}).get("solve_date", "n/a")),
-        (".lst", "%s (modified %s)" % (lst, _mtime(lst))),
-        ("Results .gdx", "%s (modified %s)" % (Path(path) / config.RESULTS_GDX, _mtime(Path(path) / config.RESULTS_GDX))),
-        ("Generator inputs", "%s (modified %s)" % (loader.gen_params_source(path), _mtime(loader.gen_params_source(path)))),
-        ("Demand", "%s (modified %s)" % (Path(path) / config.DEMAND_CSV, _mtime(Path(path) / config.DEMAND_CSV))),
+        (".lst", lst),
+        ("Results .gdx", gdx),
+        ("Generator inputs", _exists(src)),
+        ("Demand", _exists(root / sc["demand"])),
     ]
-    note = versions.read_meta(path).get("note")
-    if note:
-        rows.append(("Snapshot note", note))
+    if sc["load_factor"] is not None:
+        rows.append(("Load factors", _exists(root / sc["load_factor"])))
     return _run_block(run, [html.Table([html.Tr([html.Td(k, className="text-muted pe-3"), html.Td(v)])
                                         for k, v in rows], className="small")])
 
 
 def register_callbacks(app):
     @app.callback([Output("d-window", "children")] + [Output("d-" + k, "children") for k, _ in SECTIONS], *INPUTS)
-    def update(runs, start, days, gens):
-        df, params = access.load_selected(runs)
+    def update(scenario, start, hours, gens, caps):
+        df, params = access.load_selected(scenario, caps)
         empty = [_note("No data")] * len(SECTIONS)
         if df.empty:
             return ["No data"] + empty
         gens = access.selected_gens(gens)
-        w_all, s, last = access.filter_window(df, start, days)
-        paths = dict(versions.list_runs())
+        w_all, s, last = access.filter_window(df, start, hours)
+        keys = {config.scenario_label(k): k for k in config.SCENARIOS}
         out = {k: [] for k, _ in SECTIONS}
-        merit_runs, compare = [], {}
+        merit_runs = []
         for run in df["run"].unique():
-            path = paths[run]
-            lst = lst_parser.load_lst(path)
+            key = keys[run]
+            lst = lst_parser.load_lst(key, caps=caps)
             summary, qcap = (lst if lst else (None, None))
             p = params[run]
-            full, w = df[df["run"] == run], w_all[w_all["run"] == run]
-            chk = D.objective_check(full, (summary or {}).get("objective"))
+            w = w_all[w_all["run"] == run]
             out["health"].append(_run_block(run, [_health(summary)]))
-            out["objective"].append(_run_block(run, [_objective(chk)]))
             out["size"].append(_run_block(run, [_size(summary)]))
-            out["inputs"].append(_run_block(run, [_table(D.inputs_table(p)),
-                                                  html.Small("SRMC = vom + cost / eff ($/MWh). Source: %s"
-                                                             % loader.gen_params_source(path).name,
-                                                             className="text-muted")]))
             merit_runs.append((run, p))
             out["capacity"].append(_capacity(run, w, p, gens))
             out["capvalue"].append(_capvalue(run, qcap, w, gens))
             out["setter"].append(_setter(run, w, p))
-            out["info"].append(_info(run, path, summary))
-            compare[run] = _compare_info(p, summary, chk)
+            out["info"].append(_info(run, key, summary, caps))
+        out["inputs"] = _ramp_inputs(caps)
         dem = (float(w_all["demand"].min()), float(w_all["demand"].max())) if not w_all.empty else (None, None)
         out["merit"] = [dcc.Graph(figure=_merit_fig(merit_runs, dem))]
-        out["compare"] = ([_table(D.compare_runs(compare),
-                                  style_data_conditional=[{"if": {"filter_query": '{changed} = "yes"'},
-                                                           "backgroundColor": "#fff3cd"}])]
-                          if len(compare) > 1 else [_note("Select 2 or more runs in the sidebar to compare.")])
-        label = "Window (sections 6-8): " + access.range_label(s, last)
+        label = "Window (sections 5-7): " + access.range_label(s, last)
         return [label] + [out[k] for k, _ in SECTIONS]

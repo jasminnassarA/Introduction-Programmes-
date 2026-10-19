@@ -98,9 +98,19 @@ def test_price_setter_and_capacity(params):
 
 def test_capacity_value(params):
     q = lst_parser.parse_equ_marginals(LST, "Qcap")
-    w = pd.DataFrame({"T": [2], "datetime": [pd.Timestamp("2024-01-01 01:00")]})
+    w = pd.DataFrame({"T": [2]})
     hourly, summ = D.capacity_value(q, w, ["Solar", "Coal"])
     assert summ.set_index("gen")["total_value_per_mw"].to_dict() == {"Solar": 20.5, "Coal": 20.1}
+    assert list(hourly.columns) == ["gen", "T", "value"]
+
+
+def test_capacity_checks_use_available(params):
+    w = pd.DataFrame({"T": [1, 2], "price": [1.0, 1.0], "demand": [300, 700],
+                      "Solar": [100, 500], "Coal": [0, 0], "Gas": [200, 200],
+                      "avail_Solar": [100, 500], "avail_Coal": [0, 0], "avail_Gas": [600, 100]})
+    summ, per = D.capacity_checks(w, params)
+    assert per.set_index("gen")["hours_at_cap"].to_dict() == {"Solar": 2, "Coal": 0, "Gas": 1}
+    assert summ["shortfall_hours"] == 1 and not summ["adequate"]
 
 
 def test_diagnostics_layout_has_all_sections():
@@ -108,4 +118,5 @@ def test_diagnostics_layout_has_all_sections():
     ids = str(diagnostics.layout())
     for k, _ in diagnostics.SECTIONS:
         assert "d-" + k in ids
-    assert len(diagnostics.SECTIONS) == 10
+    assert len(diagnostics.SECTIONS) == 8
+    assert "objective" not in dict(diagnostics.SECTIONS) and "compare" not in dict(diagnostics.SECTIONS)
