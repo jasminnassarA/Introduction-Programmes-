@@ -24,7 +24,8 @@ PLOTS = {
                "that set the price when it charged. The battery itself has no cost and never sets the price."),
     "cost": ("Cost by technology", "Total generation cost over the selected hours ($). "
                                    "The model gives batteries no operating cost (assumption A4), so Battery = $0."),
-    "cf": ("Capacity factor (%)", "Generation / available capacity (cap x hourly load factor) over the selected hours."),
+    "cf": ("Capacity factor (%)", "Generation / available capacity (cap x hourly load factor) over the selected hours. "
+                                  "Battery = MWh discharged / (battery power MW x hours)."),
 }
 
 # Rows of the page: (section header, [(key, full_width), ...])
@@ -67,7 +68,7 @@ def layout():
     ]
     for header, items in SECTIONS:
         body.append(html.H4(header, className=HEADER))
-        body.append(dbc.Row([dbc.Col(_card(k), lg=12 if full else 6) for k, full in items]))
+        body.append(dbc.Row([dbc.Col(_card(k), id="s-col-" + k, lg=12 if full else 6) for k, full in items]))
     body.append(html.H4("Battery (whole selected window)", className=HEADER))
     body.append(html.Div(id="s-battery", className="mb-2"))
     body.append(html.H4("Summary table", className=HEADER))
@@ -187,34 +188,52 @@ def _spread_small(labels, vals):
 
 
 def _donuts(runs, labels_vals, colours, unit, centre_fmt, label_all=False):
-    """label_all=True labels every non-zero slice (small ones outside, spread apart)."""
+    """label_all=True labels every non-zero slice (small ones outside, spread apart).
+    Compare mode (>1 run): 2-column grid, larger donuts; a number stays inside its slice when it fits,
+    otherwise Plotly puts it outside with a connector line to the slice."""
     n = len(runs)
-    fig = make_subplots(rows=1, cols=n, specs=[[{"type": "domain"}] * n], horizontal_spacing=0.12)
-    for i, run in enumerate(runs, start=1):
+    multi = n > 1
+    cols = 2 if multi else 1
+    rows = (n + cols - 1) // cols
+    fig = make_subplots(rows=rows, cols=cols, specs=[[{"type": "domain"}] * cols] * rows,
+                        horizontal_spacing=0.2, vertical_spacing=0.2 if multi else 0.0)
+    for i, run in enumerate(runs):
         labels, vals = labels_vals[run]
         if label_all:
             labels, vals = _spread_small(labels, vals)
         tot = float(sum(vals)) or 1.0
-        small = 0.0 if label_all else SMALL_SLICE
-        # big slices: label inside; mid slices: outside; tiny slices: no text (hover + legend)
-        pos = ["inside" if v / tot >= 0.12 else "outside" if v / tot > small or (label_all and v > 0) else "none"
-               for v in vals]
-        fig.add_trace(go.Pie(labels=labels, values=vals, hole=0.55, sort=False, name=run,
+        if multi:
+            # "auto": inside if the number fits, else outside with a line to the slice; zero slices: no text
+            pos = ["auto" if v > 0 else "none" for v in vals]
+        else:
+            small = 0.0 if label_all else SMALL_SLICE
+            # big slices: label inside; mid slices: outside; tiny slices: no text (hover + legend)
+            pos = ["inside" if v / tot >= 0.12 else "outside" if v / tot > small or (label_all and v > 0)
+                   else "none" for v in vals]
+        fig.add_trace(go.Pie(labels=labels, values=vals, hole=0.5 if multi else 0.55, sort=False, name=run,
                              marker=dict(colors=[colours.get(l, "#999999") for l in labels],
                                          line=dict(color="white", width=2)),
                              texttemplate="%{percent:.1%}", textposition=pos,
-                             insidetextorientation="horizontal",
+                             insidetextorientation="horizontal", textfont=dict(size=13 if multi else 12),
+                             outsidetextfont=dict(color="#333333"),
                              automargin=True, insidetextfont=dict(color="white"),
                              hovertemplate="<b>%{label}</b><br>%{value:,.0f} " + unit
                                            + "<br>%{percent}<extra>" + run + "</extra>"),
-                      row=1, col=i)
+                      row=i // cols + 1, col=i % cols + 1)
         dom = fig.data[-1].domain
         fig.add_annotation(text=centre_fmt % _compact(sum(vals)), showarrow=False,
                            x=sum(dom.x) / 2, y=sum(dom.y) / 2, xref="paper", yref="paper",
-                           xanchor="center", yanchor="middle", font=dict(size=11))
-        fig.add_annotation(text="<b>%s</b>" % run, showarrow=False, x=sum(dom.x) / 2, y=-0.06,
+                           xanchor="center", yanchor="middle", font=dict(size=13 if multi else 11))
+        fig.add_annotation(text="<b>%s</b>" % run, showarrow=False, x=sum(dom.x) / 2,
+                           y=dom.y[0] - (0.04 if multi else 0.06),
                            xref="paper", yref="paper", xanchor="center", yanchor="top",
-                           font=dict(size=13))
+                           font=dict(size=14 if multi else 13))
+    if multi:
+        _style(fig, height=450 * rows + 100)
+        fig.update_layout(margin=dict(t=60, b=120, l=80, r=80),
+                          legend=dict(orientation="h", yanchor="top", y=-0.1, x=0.5, xanchor="center",
+                                      title_text=""))
+        return fig
     _style(fig, height=480)
     # legend (coloured square + name) in a row under the donuts; slices only carry the percentage
     fig.update_layout(margin=dict(t=50, b=110, l=50, r=50), uniformtext=dict(minsize=10, mode="show"),
@@ -262,10 +281,9 @@ def _setter_pie(df, params):
     return _donuts(runs, lv, SETTER_COLOURS, "hours", "<b>%s</b><br>hours", label_all=True)
 
 
-def _figure(key, df, params, gens, battery=True):
+def _figure(key, df, params, gens, battery=True, bat_power=None):
     if df.empty:
         return go.Figure()
-    cmap = config.GEN_COLOURS
     if key == "price":
         return _price_lines(df)
     if key == "share":
@@ -281,12 +299,29 @@ def _figure(key, df, params, gens, battery=True):
             if tr.name == metrics.BATTERY:  # zero-height bar: label it so it's visible
                 tr.update(text=["$0"] * len(tr.x), textposition="outside", cliponaxis=False)
     else:
-        d = metrics.capacity_factor(df)
-        d = d[d["gen"].isin(gens)]
-        fig = px.bar(d, x="run", y="cf", color="gen", barmode="group", color_discrete_map=cmap,
-                     labels={"cf": "%", "run": ""})
+        d = metrics.capacity_factor(df, bat_power if battery else None)
+        d = d[d["gen"].isin(list(gens) + ([metrics.BATTERY] if battery else []))]
+        fig = px.bar(d, x="run", y="cf", color="gen", barmode="group",
+                     color_discrete_map=config.GEN_COLOURS_WITH_BATTERY, labels={"cf": "%", "run": ""})
     fig.update_xaxes(type="category")
     return _style(fig)
+
+
+def _short_labels(df, params):
+    """Compare-all mode: shorten long scenario names (e.g. 'Renewable int.') so labels don't overlap."""
+    ren = config.compare_labels()
+    if not df.empty:
+        df = df.assign(run=df["run"].replace(ren))
+    return df, {ren.get(k, k): v for k, v in (params or {}).items()}
+
+
+def _bat_power(df, caps=None):
+    """{run: battery power MW} for battery scenarios present in df."""
+    out = {}
+    for k, s in config.SCENARIOS.items():
+        if "battery" in s and not df.empty and config.scenario_label(k) in set(df["run"]):
+            out[config.scenario_label(k)] = loader.load_bat_params(k, caps=caps)["power"]
+    return out
 
 
 def _windowed(scenario, hours, caps=None):
@@ -294,6 +329,8 @@ def _windowed(scenario, hours, caps=None):
     if df.empty:
         return df, params
     w, _, _ = access.filter_window(df, 1, hours)
+    if scenario == config.BOTH:
+        w, params = _short_labels(w, params)
     return w, params
 
 
@@ -335,9 +372,16 @@ def register_callbacks(app):
             @app.callback(Output("s-fig-" + k, "figure"), *GLOBAL_INPUTS)
             def _cb(scenario, hours, gens, caps):
                 w, params = _windowed(scenario, hours, caps)
+                bp = _bat_power(w, caps) if k == "cf" else None
                 with access.PLOT_LOCK:  # plotly express is not thread-safe (shared template)
-                    return _figure(k, w, params, access.selected_gens(gens), access.show_battery(gens))
+                    return _figure(k, w, params, access.selected_gens(gens), access.show_battery(gens), bp)
         make(key)
+
+    @app.callback(Output("s-col-share", "lg"), Output("s-col-setter", "lg"), Input("scenario", "value"))
+    def pie_widths(scenario):
+        # compare-all: each pie card gets the full row so the 2x2 donut grid is large enough
+        w = 12 if scenario == config.BOTH else 6
+        return w, w
 
     @app.callback(Output("s-kpis", "children"), *GLOBAL_INPUTS)
     def kpis(scenario, hours, gens, caps):
@@ -355,6 +399,8 @@ def register_callbacks(app):
         if w.empty:
             return [], [], label
         t = metrics.summary_table(w)
+        if scenario == config.BOTH:
+            t["run"] = t["run"].replace(config.compare_labels())
         keep = access.selected_gens(gens)
         t = t.drop(columns=[g + "_mwh" for g in config.GENERATORS if g not in keep])
         return t.to_dict("records"), [{"name": c, "id": c} for c in t.columns], label

@@ -42,13 +42,18 @@ def battery_runs():
     return {config.scenario_label(k) for k, s in config.SCENARIOS.items() if "battery" in s}
 
 
-def capacity_factor(df):
-    """CF = generation / available energy (cap x load factor, summed over window hours)."""
+def capacity_factor(df, bat_power=None):
+    """CF = generation / available energy (cap x load factor, summed over window hours).
+    bat_power {run: MW}: adds a Battery row = MWh discharged / (power MW x hours in window)."""
     rows = []
     for run, r in df.groupby("run", sort=False):
         for g in config.GENERATORS:
             avail = r["avail_" + g].sum()
             rows.append({"run": run, "gen": g, "cf": 100.0 * r[g].sum() / avail if avail > 0 else 0.0})
+        if bat_power is not None and run in bat_power:
+            avail = float(bat_power[run]) * len(r)
+            dis = float(r["bat_discharge"].sum()) if "bat_discharge" in r.columns else 0.0
+            rows.append({"run": run, "gen": BATTERY, "cf": 100.0 * dis / avail if avail > 0 else 0.0})
     return pd.DataFrame(rows, columns=["run", "gen", "cf"])
 
 

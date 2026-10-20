@@ -26,6 +26,7 @@ SCENARIOS = {
     },
     "renewable": {
         "label": "Renewable intermittency",
+        "short_label": "Renewable int.",  # used when all scenarios are compared (avoids label overlap)
         "results": Path("Results") / "Renewable_intermit.gdx",
         "gen_gdx": Path("Inputs") / "Renewable_intermit.gdx",
         "gen_csv": Path("Inputs") / "Renewable_intermit.csv",
@@ -103,3 +104,8 @@ def scenario_keys(value):
 
 def scenario_label(key):
     return SCENARIOS[key]["label"]
+
+
+def compare_labels():
+    """{full label: short label} applied on the summary page when all scenarios are compared."""
+    return {s["label"]: s["short_label"] for s in SCENARIOS.values() if "short_label" in s}
