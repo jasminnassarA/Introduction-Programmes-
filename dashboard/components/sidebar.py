@@ -32,6 +32,7 @@ def layout():
                     dbc.NavLink("Summary metrics", href="/summary", active="exact"),
                     dbc.NavLink("Diagnostics", href="/diagnostics", active="exact"),
                     dbc.NavLink("Nodal", href=config.NODAL_PATH, active="exact"),
+                    dbc.NavLink("Interconnectors", href=config.INTERCONNECTORS_PATH, active="exact"),
                 ],
                 vertical=True, pills=True, className="mb-4",
             ),

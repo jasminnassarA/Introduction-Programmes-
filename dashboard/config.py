@@ -112,6 +112,33 @@ NODAL_GEN_COLOURS = {"GENERATOR_1": "#2ca02c", "GENERATOR_2": "#98df8a", "GENERA
                      "GENERATOR_4": "#ff7f0e", "GENERATOR_5": "#d62728", "Unserved": "#000000"}
 
 
+# Interconnector model (own page /interconnectors): one results gdx per region count.
+INTERCONNECTORS = {
+    "label": "Interconnectors",
+    "gms": Path("models") / "Interconnectors.gms",
+    "results": Path("Results") / "Interconnectors_{n}.gdx",
+    "lst": Path("outputs") / "Interconnectors_{n}.lst",
+    "gen_csv": Path("Inputs") / "Interconnect_in" / "generators.csv",
+    "link_csv": Path("Inputs") / "Interconnect_in" / "interconnectors.csv",
+}
+INTERCONNECTORS_PATH = "/interconnectors"
+IC_REGION_COUNTS = [2, 4]
+IC_DEFAULT_REGIONS = 2
+IC_GENERATORS = ["Solar", "Wind", "Coal", "Gas", "Nuclear"]
+IC_MULTIPLIERS = [0, 0.5, 1, 1.5, 2, 3]
+IC_LINK_MAX = 600  # MW, link capacity slider maximum
+IC_VOLL = 10000.0
+IC_GEN_COLOURS = dict(GEN_COLOURS, Nuclear="#8e44ad", Import="#9edae5", Export="#c7c7c7", Unserved="#000000")
+IC_REGION_COLOURS = {"R1": "#1f77b4", "R2": "#17a2b8", "R3": "#f4b400", "R4": "#8e44ad"}
+IC_REGION_NAMES = {"R1": "R1 existing", "R2": "R2 wind", "R3": "R3 solar", "R4": "R4 nuclear"}
+# Map positions (x, y in 0..1): R2 north, R1 centre, R4 south-west, R3 south.
+IC_POSITIONS = {"R2": (0.5, 0.92), "R1": (0.5, 0.55), "R4": (0.15, 0.2), "R3": (0.7, 0.08)}
+
+
+def ic_path(key, n):
+    return Path(str(INTERCONNECTORS[key]).format(n=n))
+
+
 def scenario_keys(value):
     """Dropdown value -> list of scenario keys."""
     if value == BOTH:

@@ -121,22 +121,31 @@ def test_films_have_frames_and_speeds(data):
     for key in ("network", "bars"):
         fig = page.figure(key, data, 1, 3)
         assert [f["name"] for f in fig["frames"]] == ["1", "2", "3"]
-        labels = [b["label"] for b in fig["layout"]["updatemenus"][0]["buttons"]]
-        assert labels[:3] == ["\u25B6 1 s/h", "\u25B6 2 s/h", "\u25B6 5 s/h"]
-        assert fig["layout"]["updatemenus"][0]["buttons"][0]["args"][1]["frame"]["duration"] == 1000
         assert len(fig["layout"]["sliders"][0]["steps"]) == 3
+    bars = page.figure("bars", data, 1, 3)
+    labels = [b["label"] for b in bars["layout"]["updatemenus"][0]["buttons"]]
+    assert labels[:3] == ["\u25B6 1 s/h", "\u25B6 2 s/h", "\u25B6 5 s/h"]
+    assert bars["layout"]["updatemenus"][0]["buttons"][0]["args"][1]["frame"]["duration"] == 1000
+    net = page.figure("network", data, 1, 3)
+    buttons = net["layout"]["updatemenus"][0]["buttons"]
+    assert [b["label"] for b in buttons] == ["\u25B6 Play", "\u275A\u275A Pause"]
+    assert buttons[0]["args"][1]["frame"]["duration"] == page.PLAY_MS
+    assert page.PLAY_MS * 168 <= 10000   # whole week in ~10 s
     assert len(page.figure("network", data, 2, 3)["frames"]) == 2   # follows the hour range
 
 
 def test_network_colours_by_hour(data):
-    from dashboard.data import topology as t
     fig = page.figure("network", data, 1, 3)
-    red = t.CLASS_COLOURS["high"]
+    red = page.NET_BINS[-1][1]
 
     def has_red(traces):
         return any(tr.get("line", {}).get("color") == red and tr["x"] for tr in traces)
     frames = {f["name"]: f["data"] for f in fig["frames"]}
     assert has_red(frames["2"]) and has_red(frames["3"]) and not has_red(frames["1"])  # L1 90% / 100%
+    # empty lines are never drawn: no grey "empty"/"never carries power" traces
+    names = {tr.get("name") for fr in frames.values() for tr in fr} | {tr.get("name") for tr in fig["data"]}
+    assert "Never carries power" not in names
+    assert all(len(f) == len(frames["1"]) for f in frames.values())
     assert page.NETWORK_NOTE.startswith("Illustrative only")
     assert "Illustrative only" in str(page.layout())
 

@@ -32,10 +32,10 @@ PLOTS = {
     "util": ("8. Generator utilisation", "Average output / capacity over the selected hours (capacity factor)."),
     "duration": ("9. Price duration curve", "LMP of each selected node sorted from highest to lowest. "
                                             "No node selected = every node in the chosen scope."),
-    "network": ("B. Network congestion film", "One frame per hour. Grey = empty (< 0.1 MW), green < 50%, "
-                                              "yellow 50-90%, red >= 90% of rating, blue = unlimited (inf) line "
-                                              "with flow. Thicker = more MW. Press a play button to choose the "
-                                              "speed (1 s per hour = 168 s for the week). Dashed thin lines = spur from a node that is not an end of any guessed line to the line it influences most (largest |shift factor|). Tick generators to draw their influence lines."),
+    "network": ("B. Network congestion film", "One frame per hour. Only lines carrying power that hour are drawn. "
+                                              "Colour = % of rating (green -> red), cyan = unlimited (inf) line. "
+                                              "Thicker = more MW, arrows = flow direction. Node colour = LMP. "
+                                              "Play runs the whole week in about 10 s. Dashed thin lines = spur from a node that is not an end of any guessed line to the line it influences most (largest |shift factor|). Tick generators to draw their influence lines."),
     "bars": ("A. Line loading film", "Every line that carries power during the week. Left: rated lines, % of "
                                      "rating. Right: unlimited (inf) lines, MW. Same colours and controls as the "
                                      "network film. Scroll inside the chart to see all lines."),
@@ -326,12 +326,16 @@ def _flow_table(flows, lo, hi):
     return flow, rating
 
 
-def _anim_controls(hours, redraw=True):
-    def play(ms):
-        return dict(label="\u25B6 %s/h" % dict(SPEEDS)[ms], method="animate",
+def _anim_controls(hours, redraw=True, speeds=None):
+    """speeds: [(ms per hour, label)]; default SPEEDS with "<label>/h" button labels."""
+    def play(ms, label):
+        return dict(label=label, method="animate",
                     args=[None, {"frame": {"duration": ms, "redraw": redraw}, "fromcurrent": True,
                                  "transition": {"duration": 0}, "mode": "immediate"}])
-    buttons = [play(ms) for ms, _ in SPEEDS]
+    if speeds is None:
+        buttons = [play(ms, "\u25B6 %s/h" % lab) for ms, lab in SPEEDS]
+    else:
+        buttons = [play(ms, "\u25B6 %s" % lab) for ms, lab in speeds]
     buttons.append(dict(label="\u275A\u275A Pause", method="animate",
                         args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}]))
     menus = [dict(type="buttons", direction="left", showactive=True, buttons=buttons,
@@ -403,6 +407,14 @@ def influence_traces(data, pos, mids, gens_sel, threshold):
     return out
 
 
+PLAY_MS = 59  # ms per hour: 168 h in < 10 s
+NET_BG = "#0f1419"
+NET_FG = "#e5e7eb"
+NET_EDGES = [30.0, 50.0, 70.0, 90.0]  # % of rating bin edges
+NET_BINS = [("Unlimited (inf) line", "#22d3ee"), ("< 30% of rating", "#22c55e"), ("30-50%", "#a3e635"),
+            ("50-70%", "#facc15"), ("70-90%", "#fb923c"), (">= 90% of rating", "#ff3b3b")]
+
+
 def network_figure(data, lo, hi, infl_gens=None, sf_threshold=0.1):
     from dashboard.data import topology as topo
 
@@ -416,95 +428,118 @@ def network_figure(data, lo, hi, infl_gens=None, sf_threshold=0.1):
     rating = rating.reindex(lines["l"]).fillna(np.inf)
     coords = np.round(np.column_stack([pos.loc[lines["from"], ["x", "y"]].values,
                                        pos.loc[lines["to"], ["x", "y"]].values]), 3)
-    mids = pd.DataFrame({"x": (coords[:, 0] + coords[:, 2]) / 2, "y": (coords[:, 1] + coords[:, 3]) / 2},
-                        index=lines["l"].values)
+    # lines that never carry power in the window are not drawn at all
     active = (flow.abs() >= topo.EMPTY_MW).any(axis=1).values
-    # lines that never carry power: one static grey background trace (not animated)
-    static = coords[~active]
-    background = go.Scatter(x=_segments(static[:, 0], static[:, 2]), y=_segments(static[:, 1], static[:, 3]),
-                            mode="lines", hoverinfo="skip", line=dict(color=topo.CLASS_COLOURS["empty"], width=1),
-                            name="Never carries power", showlegend=True)
     A = flow.values[active]
     names = list(lines["l"].values[active])
     R = rating.values[active].astype(float)
     C = coords[active]
-    cls, pct, finite = _classify(A, R)
-    wb = np.digitize(np.abs(A), [ub for ub, _ in WIDTHS[:-1]])
-    slots = [(c, w) for c in range(len(topo.CLASSES)) for w in (range(1) if c == 0 else range(len(WIDTHS)))]
     mx, my = (C[:, 0] + C[:, 2]) / 2, (C[:, 1] + C[:, 3]) / 2
+    mids = pd.DataFrame({"x": mx, "y": my}, index=names)
+    finite = np.isfinite(R) & (R > 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        pct = np.where(finite[:, None], np.abs(A) / np.where(finite, R, 1)[:, None] * 100, np.nan)
+    on = np.abs(A) >= topo.EMPTY_MW  # line visible in that hour
+    b = np.where(~on, -1, np.where(~finite[:, None], 0, 1 + np.digitize(np.nan_to_num(pct), NET_EDGES)))
+    wb = np.digitize(np.abs(A), [ub for ub, _ in WIDTHS[:-1]])
+    base = np.degrees(np.arctan2(C[:, 2] - C[:, 0], C[:, 3] - C[:, 1]))  # from->to, clockwise from up
+    ang = np.where(A >= 0, base[:, None], base[:, None] + 180.0)
+    bin_cols = np.array([c for _, c in NET_BINS])
     rtxt = ["inf" if not f else "%.0f MW" % r for f, r in zip(finite, R)]
 
-    # spurs: node -> nearer end of the line it influences most; coloured like that line each hour
+    # spurs (node -> nearer end of the line it influences most), only to lines that carry power
     sp = tp.get("spurs")
-    sp = sp[sp["n"].isin(pos.index) & sp["l"].isin(lines["l"])] if sp is not None and len(sp) else \
+    sp = sp[sp["n"].isin(pos.index) & sp["l"].isin(names)] if sp is not None and len(sp) else \
         pd.DataFrame(columns=["n", "l", "sf"])
-    li = {l: i for i, l in enumerate(lines["l"])}
-    S = np.zeros((0, 4))
+    li = {l: i for i, l in enumerate(names)}
+    S, sp_on = np.zeros((0, 4)), np.zeros((0, len(hours)), dtype=bool)
     if len(sp):
         idx = np.array([li[l] for l in sp["l"]])
         nxy = pos.loc[sp["n"], ["x", "y"]].values
-        e0, e1 = coords[idx, 0:2], coords[idx, 2:4]
+        e0, e1 = C[idx, 0:2], C[idx, 2:4]
         near = np.where((((nxy - e0) ** 2).sum(1) <= ((nxy - e1) ** 2).sum(1))[:, None], e0, e1)
-        S = np.column_stack([nxy, near])
-        s_cls, _, _ = _classify(flow.values[idx], rating.values[idx].astype(float))
-    gen_at = {n: g for g, n in data["gens"]["NODE"].items()}
-    sp_text = ["%s%s \u2192 %s, SF %.2f" % (n, " (%s)" % _short(gen_at[n]) if n in gen_at else "", l, s)
-               for n, l, s in zip(sp["n"], sp["l"], sp["sf"])]
+        S, sp_on = np.column_stack([nxy, near]), on[idx]
+
+    # nodes: generators/demand always; others only if they touch a line that carries power
+    gens = data["gens"]
+    gen_nodes = {n: g for g, n in gens["NODE"].items() if n in pos.index}
+    dem = set(n for n in data.get("dem_nodes", []) if n in pos.index and n not in gen_nodes)
+    used = set(lines["from"].values[active]) | set(lines["to"].values[active]) | set(sp["n"])
+    nodes = [n for n in pos.index if n not in gen_nodes and (n in dem or n in used)]
+    nx, ny = pos.loc[nodes, "x"].values, pos.loc[nodes, "y"].values
+    lmp = data["lmp"].reindex(index=hours, columns=nodes).values.astype(float) if hours else np.zeros((0, 0))
+    finite_lmp = lmp[np.isfinite(lmp)] if lmp.size else np.zeros(0)
+    cmin, cmax = (np.percentile(finite_lmp, [2, 98]) if finite_lmp.size else (0.0, 1.0))
+    if cmax <= cmin:
+        cmax = cmin + 1.0
+    nsize = [10 if n in dem else 6 for n in nodes]
+    nline = [1.2 if n in dem else 0 for n in nodes]
+    nkind = ["Demand node " if n in dem else "Node " for n in nodes]
 
     def frame_traces(j):
         out = []
-        for c, w in slots:
-            m = (cls[:, j] == c) & ((c == 0) | (wb[:, j] == w))
-            name = topo.CLASSES[c]
-            out.append(dict(type="scatter", x=_segments(C[m, 0], C[m, 2]), y=_segments(C[m, 1], C[m, 3]),
-                            mode="lines", hoverinfo="skip", name=topo.CLASS_LABELS[name], legendgroup=name,
-                            showlegend=(w == 0),
-                            line=dict(color=topo.CLASS_COLOURS[name], width=1 if c == 0 else WIDTHS[w][1])))
-        for c, name in enumerate(topo.CLASSES):
-            m = (s_cls[:, j] == c) if len(S) else np.zeros(0, dtype=bool)
-            out.append(dict(type="scatter", x=_segments(S[m, 0], S[m, 2]), y=_segments(S[m, 1], S[m, 3]),
-                            mode="lines", hoverinfo="skip", legendgroup="spur", showlegend=(c == 0),
-                            name="Spur: strongest influence (from shift factors)",
-                            line=dict(color=topo.CLASS_COLOURS[name] if c else "#9a9a9a", width=1, dash="dot")))
+        for bi, (label, col) in enumerate(NET_BINS):
+            for w in range(len(WIDTHS)):
+                m = (b[:, j] == bi) & (wb[:, j] == w)
+                out.append(dict(type="scatter", x=_segments(C[m, 0], C[m, 2]), y=_segments(C[m, 1], C[m, 3]),
+                                mode="lines", hoverinfo="skip", name=label, legendgroup="bin%d" % bi,
+                                showlegend=(w == 0), opacity=0.9,
+                                line=dict(color=col, width=WIDTHS[w][1])))
+        m = sp_on[:, j] if len(S) else np.zeros(0, dtype=bool)
+        out.append(dict(type="scatter", x=_segments(S[m, 0], S[m, 2]), y=_segments(S[m, 1], S[m, 3]),
+                        mode="lines", hoverinfo="skip", legendgroup="spur", showlegend=True,
+                        name="Spur: strongest influence (from shift factors)",
+                        line=dict(color="#6b7280", width=1, dash="dot")))
+        m = on[:, j]
         text = ["%s: %.0f MW / %s%s" % (n, a, r, "" if p != p else " (%.0f%%)" % p)
-                for n, a, r, p in zip(names, A[:, j], rtxt, pct[:, j])]
-        out.append(dict(type="scatter", x=mx, y=my, mode="markers", text=text, hoverinfo="text", showlegend=False,
-                        marker=dict(size=8, color="#000000", opacity=0.01)))
+                for n, a, r, p, k in zip(names, A[:, j], rtxt, pct[:, j], m) if k]
+        out.append(dict(type="scatter", x=mx[m], y=my[m], mode="markers", text=text, hoverinfo="text",
+                        showlegend=False, marker=dict(symbol="arrow", size=10, angle=ang[m, j],
+                                                      color=list(bin_cols[b[m, j]]),
+                                                      line=dict(width=0))))
+        vals = lmp[j] if lmp.size else []
+        out.append(dict(type="scatter", x=nx, y=ny, mode="markers", showlegend=False, hoverinfo="text",
+                        text=["%s%s: %.2f $/MWh" % (k, n, v) for k, n, v in zip(nkind, nodes, vals)],
+                        marker=dict(size=nsize, color=vals, colorscale="Plasma", cmin=cmin, cmax=cmax,
+                                    line=dict(color="white", width=nline), showscale=True,
+                                    colorbar=dict(title=dict(text="LMP<br>$/MWh", font=dict(color=NET_FG)),
+                                                  tickfont=dict(color=NET_FG), thickness=12, len=0.6,
+                                                  x=1.0, outlinewidth=0))))
         return out
 
-    gens = data["gens"]
-    gen_nodes = {n: g for g, n in gens["NODE"].items() if n in pos.index}
-    dem = [n for n in data.get("dem_nodes", []) if n in pos.index and n not in gen_nodes]
-    other = [n for n in pos.index if n not in gen_nodes and n not in dem]
-    statics = [background]
+    statics = []
     if len(S):  # invisible hover points at spur midpoints
         statics.append(go.Scatter(x=(S[:, 0] + S[:, 2]) / 2, y=(S[:, 1] + S[:, 3]) / 2, mode="markers",
-                                  text=sp_text, hoverinfo="text", showlegend=False,
+                                  text=["%s \u2192 %s, SF %.2f" % (n, l, s) for n, l, s in
+                                        zip(sp["n"], sp["l"], sp["sf"])],
+                                  hoverinfo="text", showlegend=False,
                                   marker=dict(size=6, color="#000000", opacity=0.01)))
     statics += influence_traces(data, pos, mids, infl_gens, sf_threshold)
-    statics += [go.Scatter(x=pos.loc[other, "x"], y=pos.loc[other, "y"], mode="markers", name="Node",
-                           marker=dict(size=4, color="#999999"), text=other, hoverinfo="text"),
-                go.Scatter(x=pos.loc[dem, "x"], y=pos.loc[dem, "y"], mode="markers", name="Demand node",
-                           marker=dict(size=9, color="white", line=dict(color="black", width=1)),
-                           text=["Demand node %s" % n for n in dem], hoverinfo="text")]
     for n, g in gen_nodes.items():
         top = topo.top_lines(data["ptdf"], n, k=5) if data.get("ptdf") is not None else pd.DataFrame(columns=["l", "sf"])
         hover = "%s at node %s (MC %s $/MWh)<br>Top lines by shift factor: %s" % (
             g, n, gens.loc[g, "MC"], ", ".join("%s %.2f" % (l, s) for l, s in zip(top["l"], top["sf"])) or "none")
         statics.append(go.Scatter(x=[pos.loc[n, "x"]], y=[pos.loc[n, "y"]], mode="markers+text", name=_short(g),
-                                  text=[_short(g)], textposition="top center", textfont=dict(size=13),
+                                  text=[_short(g)], textposition="top center",
+                                  textfont=dict(size=13, color=NET_FG),
                                   hovertext=[hover], hoverinfo="text",
-                                  marker=dict(size=20, symbol="square", color=config.NODAL_GEN_COLOURS.get(g, "#7f7f7f"),
-                                              line=dict(color="black", width=1.5))))
+                                  marker=dict(size=18, symbol="square", color=config.NODAL_GEN_COLOURS.get(g, "#7f7f7f"),
+                                              line=dict(color="white", width=1.5))))
     first = frame_traces(0) if hours else []
     n_dyn = len(first)
     fig = go.Figure(data=first + statics)
-    menus, slider = _anim_controls(hours, redraw=False)
+    menus, slider = _anim_controls(hours, redraw=False, speeds=[(PLAY_MS, "Play")])
+    menus[0].update(bgcolor="#1f2937", bordercolor="#374151", font=dict(color=NET_FG))
+    slider[0].update(bgcolor="#1f2937", activebgcolor="#22d3ee", bordercolor="#374151", font=dict(color=NET_FG),
+                     currentvalue=dict(prefix="Hour ", font=dict(color=NET_FG)))
     fig.update_layout(updatemenus=menus, sliders=slider)
     fig.update_xaxes(visible=False, range=[-0.03, 1.03])
     fig.update_yaxes(visible=False, range=[-0.03, 1.06], scaleanchor="x")
     _style(fig, 900)
-    fig.update_layout(legend=dict(y=-0.02, yanchor="top"), margin=dict(t=60, b=140, l=10, r=10))
+    fig.update_layout(template="plotly_dark", paper_bgcolor=NET_BG, plot_bgcolor=NET_BG, font=dict(color=NET_FG),
+                      hoverlabel=dict(bgcolor="#111827", font=dict(color=NET_FG)),
+                      legend=dict(y=-0.02, yanchor="top", bgcolor="rgba(0,0,0,0)", font=dict(color=NET_FG)),
+                      margin=dict(t=60, b=140, l=10, r=10))
     return _with_frames(fig, [(str(t), frame_traces(j), list(range(n_dyn))) for j, t in enumerate(hours)])
 
 

@@ -258,3 +258,119 @@ def run_nodal(root=None):
             time.time() - t0, status, time.strftime("%H:%M:%S"))
     finally:
         _NODAL_LOCK.release()
+
+
+# ---------------- Interconnectors (own page) ----------------
+# Base inputs: re-solve and overwrite Results\Interconnectors_<N>.gdx.
+# Changed capacities: solve in a temporary folder, keep the result in memory only (_IC_CACHE).
+_IC_LOCK = threading.Lock()
+_IC_CACHE = OrderedDict()  # key string -> data dict (dashboard.data.interconnectors.build)
+
+
+def ic_base_caps(root=None):
+    """{"R1.Solar": MW, ...} from Inputs\\Interconnect_in\\generators.csv."""
+    df = pd.read_csv(_root(root) / config.INTERCONNECTORS["gen_csv"])
+    return {"%s.%s" % (r, g): float(c) for r, g, c in zip(df["region"], df["gen"], df["cap"])}
+
+
+def ic_base_link_cap(root=None):
+    df = pd.read_csv(_root(root) / config.INTERCONNECTORS["link_csv"])
+    return float(df["cap"].max())
+
+
+def ic_changes(mults, link_cap, root=None):
+    """(changed caps {"R2.Wind": MW}, link cap or None) relative to the base inputs."""
+    base = ic_base_caps(root)
+    caps = {k: base[k] * float(m) for k, m in (mults or {}).items()
+            if k in base and m is not None and float(m) != 1.0}
+    link = None if link_cap is None or float(link_cap) == ic_base_link_cap(root) else float(link_cap)
+    return caps, link
+
+
+def ic_key(regions, mults, link_cap, root=None):
+    """Cache key string; None when everything is at base."""
+    caps, link = ic_changes(mults, link_cap, root)
+    if not caps and link is None:
+        return None
+    parts = ["%s x%g" % (k, float(mults[k])) for k in sorted(caps)]
+    if link is not None:
+        parts.append("links %d MW" % link)
+    return "%d|%s" % (int(regions), ", ".join(parts))
+
+
+def ic_capfile_text(caps):
+    lines = ["* written by the dashboard - capacity overrides"]
+    for k, v in sorted(caps.items()):
+        r, g = k.split(".", 1)
+        lines.append("gdata('%s','%s','cap') = %g;" % (r, g, v))
+    return "\n".join(lines) + "\n"
+
+
+def ic_command(regions, outdir, lst, capfile=None, link_cap=None):
+    cmd = [config.GAMS_EXE, str(config.INTERCONNECTORS["gms"]), "--regions=%d" % int(regions),
+           "--outdir=%s" % outdir, "--noxlsx=1"]
+    if capfile:
+        cmd.append("--capfile=%s" % capfile)
+    if link_cap is not None:
+        cmd.append("--linkCap=%g" % link_cap)
+    return cmd + ["o=%s" % lst, "lo=0"]
+
+
+def _ic_solve(cmd, res, lst, root, label):
+    proc = subprocess.run(cmd, cwd=str(_root(root)), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True)
+    text = lst.read_text(errors="ignore") if lst.exists() else ""
+    status = _model_status(text)
+    if proc.returncode != 0 or not res.exists() or status not in OK_MODEL_STATUS:
+        tail = "\n".join(text.splitlines()[-15:]) or (getattr(proc, "stderr", "") or "")[-1000:]
+        raise GamsRunError("Interconnectors failed (%s; return code %s, model status %s).\n%s"
+                           % (label, proc.returncode, status, tail))
+    return status
+
+
+def ic_cached(key):
+    return _IC_CACHE.get(key) if key else None
+
+
+def run_interconnectors(regions, mults=None, link_cap=None, root=None):
+    """Solve the interconnector model. Returns (status message, key); key None = base results file."""
+    from dashboard.data import interconnectors
+
+    regions = int(regions)
+    key = ic_key(regions, mults, link_cap, root)
+    if key and key in _IC_CACHE:
+        _IC_CACHE.move_to_end(key)
+        return "Using results from this session (%s)" % key.split("|", 1)[1], key
+    if not _IC_LOCK.acquire(blocking=False):
+        raise GamsRunError("Interconnectors is already running.")
+    t0 = time.time()
+    try:
+        if key is None:
+            res = _root(root) / config.ic_path("results", regions)
+            lst = _root(root) / config.ic_path("lst", regions)
+            cmd = ic_command(regions, res.parent.relative_to(_root(root)), config.ic_path("lst", regions))
+            status = _ic_solve(cmd, res, lst, root, "base inputs")
+            interconnectors.clear_cache()
+            return ("Solved Interconnectors (%d regions, base inputs) in %.1fs - model status %d at %s"
+                    % (regions, time.time() - t0, status, time.strftime("%H:%M:%S"))), None
+        caps, link = ic_changes(mults, link_cap, root)
+        tmp = Path(tempfile.mkdtemp(prefix=config.TMP_PREFIX, dir=str(_root(root))))
+        try:
+            rel = tmp.relative_to(_root(root))
+            capfile = None
+            if caps:
+                (tmp / "caps.gms").write_text(ic_capfile_text(caps))
+                capfile = rel / "caps.gms"
+            res = tmp / config.ic_path("results", regions).name
+            lst = tmp / config.ic_path("lst", regions).name
+            status = _ic_solve(ic_command(regions, rel, rel / lst.name, capfile, link), res, lst, root,
+                               key.split("|", 1)[1])
+            _IC_CACHE[key] = interconnectors.read_gdx(res)
+            while len(_IC_CACHE) > config.RESULT_CACHE_SIZE:
+                _IC_CACHE.popitem(last=False)
+        finally:
+            shutil.rmtree(str(tmp), ignore_errors=True)
+        return ("Solved modified case (%s) in %.1fs - model status %d"
+                % (key.split("|", 1)[1], time.time() - t0, status)), key
+    finally:
+        _IC_LOCK.release()

@@ -6,7 +6,7 @@ from dash import Input, Output, State, dcc, html
 from dashboard import config
 from dashboard.components import sidebar
 from dashboard.data import access, runner
-from dashboard.pages import diagnostics, granular, nodal, summary
+from dashboard.pages import diagnostics, granular, interconnectors, nodal, summary
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
                 suppress_callback_exceptions=True, title="Dispatch Dashboard")
@@ -29,12 +29,14 @@ def route(path):
         return diagnostics.layout()
     if path == config.NODAL_PATH:
         return nodal.layout()
+    if path == config.INTERCONNECTORS_PATH:
+        return interconnectors.layout()
     return granular.layout()
 
 
 def chrome_styles(path):
     """(sidebar style, page style): the nodal page hides the sidebar and uses the full width."""
-    if path == config.NODAL_PATH:
+    if path in (config.NODAL_PATH, config.INTERCONNECTORS_PATH):
         return dict(sidebar.STYLE, display="none"), FULL_PAGE_STYLE
     return sidebar.STYLE, PAGE_STYLE
 
@@ -82,6 +84,7 @@ granular.register_callbacks(app)
 summary.register_callbacks(app)
 diagnostics.register_callbacks(app)
 nodal.register_callbacks(app)
+interconnectors.register_callbacks(app)
 
 if __name__ == "__main__":
     import os

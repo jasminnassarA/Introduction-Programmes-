@@ -15,6 +15,11 @@ for %%M in (My_First_DM RenewbaleInt DM_w_ramping Adding_Batteries Nodal_SC) do 
     "%GAMS_DIR%\gams.exe" models\%%M.gms o=outputs\%%M.lst lo=0
     findstr /c:"MODEL STATUS" outputs\%%M.lst
 )
+for %%N in (2 4) do (
+    echo === Interconnectors --regions=%%N ===
+    "%GAMS_DIR%\gams.exe" models\Interconnectors.gms --regions=%%N o=outputs\Interconnectors_%%N.lst lo=0
+    findstr /c:"MODEL STATUS" outputs\Interconnectors_%%N.lst
+)
 rem Remove GAMS scratch folders (225a, 225b, ...) if a run was interrupted.
 for /d %%D in (225*) do rmdir /s /q "%%D"
 pause
