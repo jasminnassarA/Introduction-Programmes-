@@ -2,7 +2,7 @@
 
 This repository has two parts:
 
-- **Four GAMS dispatch models.** Each one finds the lowest-cost way to meet electricity demand in every hour of one month (744 hours) using Solar, Wind, Coal and Gas generators (and, in the last model, a battery).
+- **Six GAMS dispatch models.** Four single-region models find the lowest-cost way to meet electricity demand in every hour of one month (744 hours) using Solar, Wind, Coal and Gas (the last one adds a battery). `Nodal_SC.gms` adds transmission limits and nodal prices (168 hours), and `Interconnectors.gms` links 2 or 4 regions (wind-heavy, solar-heavy, nuclear-heavy) through interconnectors with losses.
 - **A Python Dash dashboard.** It lets you explore the model results, compare scenarios, change generator capacities and re-run the models from your browser.
 
 > **Branch:** this README describes the **`AI-Dashboard`** branch. The dashboard only exists on this branch.
@@ -13,19 +13,26 @@ This repository has two parts:
 
 Before you start, you need **Windows** and **GAMS 25.1 with a MOSEK license** (in `C:\GAMS\win64\25.1`, or set `GAMS_DIR`).
 
+**Step 1 - Get the code.** Open PowerShell in the folder where you want the project (for example Documents) and run:
+
 ```powershell
-git clone https://github.com/jasminnassarA/Introduction-Programmes-.git
-cd Introduction-Programmes-
-git checkout AI-Dashboard
+git clone -b AI-Dashboard https://github.com/jasminnassarA/Introduction-Programmes-.git
 ```
 
-Then **double-click `setup_and_run.bat`**. It:
+This creates a new folder called **`Introduction-Programmes-`** inside the folder you were in, e.g. `C:\Users\<you>\Documents\Introduction-Programmes-`.
+*No Git?* On GitHub pick the **AI-Dashboard** branch, click **Code -> Download ZIP** and unzip it anywhere. The folder can have any name; below, "the project folder" means the `Introduction-Programmes-` folder (or wherever you unzipped it).
 
-1. Finds Python 3.6–3.9 (Python 3.6 preferred, since GAMS 25.1's Python API only supports 3.6). If none is installed it installs Python 3.9.13 for the current user (winget, or the python.org installer).
+**Step 2 - Start the dashboard.** Open the project folder in File Explorer. `setup_and_run.bat` is directly inside it, next to `README.md` and `run_models.bat`. **Double-click `setup_and_run.bat`.** The first run takes a few minutes. It:
+
+1. Finds Python 3.6-3.9 (Python 3.6 preferred, since GAMS 25.1's Python API only supports 3.6). If none is installed it installs Python 3.9.13 for the current user (winget, or the python.org installer).
 2. Creates `.venv` and installs `requirements.txt` (only again when that file changes).
 3. Installs the GAMS Python API into `.venv` and opens **http://127.0.0.1:8050** in your browser.
 
-Close the window to stop the dashboard. To re-solve all models, double-click `run_models.bat`.
+Keep that window open - closing it stops the dashboard.
+
+**Step 3 - Check the models run.** Once the dashboard is open in your browser, go back to the same project folder and **double-click `run_models.bat`**. It solves every model (including Interconnectors with 2 and 4 regions) and prints `MODEL STATUS 1 Optimal` for each one. If every model shows status 1, GAMS and MOSEK work, so the dashboard's **Run models** and **Re-run** buttons will work when you change capacities. If you see an error, see [10. Troubleshooting](#10-troubleshooting).
+
+**Step 4 - Use the dashboard.** Refresh the browser to load the new results, then try changing a capacity and pressing **Run models**, or **Re-run** on the Interconnectors page.
 
 Pre-computed results are included in `Results/`, so the dashboard shows data straight away. You only need GAMS to run the models yourself or to use the **Run models** button.
 
@@ -146,10 +153,11 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 ### 4.1 Get the code
 
 ```powershell
-git clone https://github.com/jasminnassarA/Introduction-Programmes-.git
+git clone -b AI-Dashboard https://github.com/jasminnassarA/Introduction-Programmes-.git
 cd Introduction-Programmes-
-git checkout AI-Dashboard
 ```
+
+The clone creates the `Introduction-Programmes-` folder inside the folder your terminal was in. Without Git, download the ZIP of the **AI-Dashboard** branch from GitHub and unzip it anywhere (any folder name works). Run every command below from inside the project folder.
 
 ### 4.2 Create a virtual environment and install packages
 
