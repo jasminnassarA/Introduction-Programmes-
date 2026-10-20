@@ -61,6 +61,7 @@ All four models are **linear programs (LPs)** solved with **MOSEK**. Each runs o
 | `RenewbaleInt.gms` | **Renewable intermittency** | Solar, Wind, Coal, Gas | Each hour, available capacity = capacity × hourly load factor (from `normalisedloads.csv`), so Wind and Solar vary over time |
 | `DM_w_ramping.gms` | **Ramping** | Solar, Wind, Coal, Gas | Everything in the renewable model, plus ramp limits (`ramp_L × cap` per hour) and a ramping cost in the objective |
 | `Adding_Batteries.gms` | **Batteries** | Solar, Wind, Coal, Gas + Battery | Everything in the ramping model, plus a battery (state of charge, charge/discharge power limits and efficiencies from `Battery_in.csv`). The battery has no operating cost |
+| `Nodal_SC.gms` | **Nodal pricing** (own page `/nodal`) | GENERATOR_1-5 at 5 nodes | Separate 168-hour model: minimises dispatch cost (MC x output) under transmission limits using a DC power flow with shift factors (532 lines, 428 nodes, 20 demand nodes). Flows are tracked on all lines; only lines with a finite rating are limited. Unserved energy is allowed at 10,000 $/MWh. Writes `Dispatch`, `LMP` (nodal prices), `FlowRep` (flow, rating, congestion price) and `TOTCost` |
 
 Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fields are:
 
@@ -85,7 +86,8 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 │   ├── My_First_DM.gms           Base-case model
 │   ├── RenewbaleInt.gms          Renewable intermittency model
 │   ├── DM_w_ramping.gms          Ramping model
-│   └── Adding_Batteries.gms      Ramping + battery storage model
+│   ├── Adding_Batteries.gms      Ramping + battery storage model
+│   └── Nodal_SC.gms              Nodal pricing model (transmission constraints)
 │
 ├── outputs/                      GAMS listing files (solver logs); read by the
 │   └── *.lst                     dashboard's Diagnostics page
@@ -97,21 +99,24 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 │   ├── demand(in).csv            Hourly demand (744 h)
 │   ├── normalisedloads.csv       Hourly availability factors per generator
 │   ├── base_case.gdx             GDX copies of the generator data
-│   └── Renewable_intermit.gdx    (created by the models, read by the dashboard)
+│   ├── Renewable_intermit.gdx    (created by the models, read by the dashboard)
+│   └── Nodes_in/                 Nodal model inputs (see section 5)
 │
 ├── Results/
 │   ├── My_First_DM_results.gdx   Base-case results
 │   ├── Renewable_intermit.gdx    Renewable-scenario results
 │   ├── ramping.gdx               Ramping-scenario results (+ PlantCost, TOTCost)
-│   └── Batteries.gdx             Battery-scenario results (+ PlantCost, TOTCost)
+│   ├── Batteries.gdx             Battery-scenario results (+ PlantCost, TOTCost)
+│   └── Nodal_SC.gdx              Nodal results (read by the Nodal page)
 │
 └── dashboard/
     ├── app.py                    Entry point (Dash app, routing)
     ├── config.py                 Paths, scenarios, GAMS location, settings
     ├── components/sidebar.py     Sidebar controls
-    ├── pages/                    granular.py, summary.py, diagnostics.py
+    ├── pages/                    granular.py, summary.py, diagnostics.py, nodal.py
     ├── data/                     loader, access, metrics, diagnostics,
-    │                             lst_parser, runner (re-runs GAMS)
+    │                             lst_parser, runner (re-runs GAMS),
+    │                             nodal (Nodal_SC results), topology (guessed layout)
     └── tests/                    pytest test suite
 ```
 
@@ -122,7 +127,7 @@ Each model writes the parameter `ExcelResults(T, field)` to a GDX file. Its fiel
 | Requirement | Needed for | Notes |
 |---|---|---|
 | **Windows** | Everything | The paths and GAMS setup assume Windows |
-| **GAMS 25.1** | Running the models and the **Run models** button | Default location is `C:\GAMS\win64\25.1`; other locations can be set (see [4.4](#44-tell-the-dashboard-where-gams-is-only-if-needed)) |
+| **GAMS 25.1** | Running the models, the **Run models** button and the Nodal page's **Re-run Nodal_SC** button (the Nodal page itself works from the committed `Results\Nodal_SC.gdx`) | Default location is `C:\GAMS\win64\25.1`; other locations can be set (see [4.4](#44-tell-the-dashboard-where-gams-is-only-if-needed)) |
 | **MOSEK license** (in GAMS) | Solving the models | The models use `option lp = mosek` |
 | **Python 3.6** | The dashboard | The versions in `requirements.txt` are pinned for Python 3.6 |
 | **GAMS Python API** (`api_36`) | Reading GDX files in the dashboard | Required by `gdxpds` |
@@ -180,13 +185,14 @@ $env:GAMS_DIR = "D:\GAMS\25.1"
 
 ## 5. Running the GAMS models
 
-> Always run the models from the **repository root** (they use relative paths such as `Inputs\...` and `Results\...`) and send the listing to `outputs\`. `run_models.bat` does this for all four models.
+> Always run the models from the **repository root** (they use relative paths such as `Inputs\...` and `Results\...`) and send the listing to `outputs\`. `run_models.bat` does this for all five models.
 
 ```powershell
 gams models\My_First_DM.gms o=outputs\My_First_DM.lst
 gams models\RenewbaleInt.gms o=outputs\RenewbaleInt.lst
 gams models\DM_w_ramping.gms o=outputs\DM_w_ramping.lst
 gams models\Adding_Batteries.gms o=outputs\Adding_Batteries.lst
+gams models\Nodal_SC.gms o=outputs\Nodal_SC.lst
 ```
 
 (Use the full path, for example `C:\GAMS\win64\25.1\gams.exe`, if `gams` is not on your `PATH`.)
@@ -204,6 +210,18 @@ Each run:
 | `RenewbaleInt.gms` | `Renewable_intermit.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\Renewable_intermit.gdx` |
 | `DM_w_ramping.gms` | `Renewable_intermit.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\ramping.gdx` |
 | `Adding_Batteries.gms` | `Renewable_intermit.csv`, `Battery_in.csv`, `demand(in).csv`, `normalisedloads.csv` | `Results\Batteries.gdx` |
+| `Nodal_SC.gms` | `Nodes_in\generators(in).csv`, `hourlydemandbynode(in).csv`, `shiftfactormatrix(in).csv`, `lineratings(in).csv` | `Results\Nodal_SC.gdx` |
+
+**Nodal inputs (`Inputs\Nodes_in`)**
+
+| File | Contents |
+|---|---|
+| `generators(in).csv` | Generator, marginal cost `MC` ($/MWh), capacity `CAP` (MW), `NODE` |
+| `hourlydemandbynode(in).csv` | Demand (MWh) for 168 hours x 20 nodes |
+| `shiftfactormatrix(in).csv` | Shift factors (PTDF), 532 lines x 428 nodes. Node 1483 is the reference bus (all zeros) |
+| `lineratings(in).csv` | Line rating (MW); `inf` = unlimited |
+| `lines_guess.csv`, `layout_guess.csv` | Cached **guessed** network layout for the Nodal page (illustrative only; rebuilt automatically if deleted) |
+| `lines(in).csv` *(optional)* | Real topology `LINE_ID,FROM,TO`; replaces the guessed line ends if present |
 
 ### Optional command-line flags
 
@@ -285,6 +303,7 @@ The dashboard reads:
 | **Granular prices** (`/`) | Hour-by-hour electricity price, demand and generation for each generator |
 | **Summary metrics** (`/summary`) | Totals and averages (cost, generation mix, prices) for each scenario |
 | **Diagnostics** (`/diagnostics`) | Solver status and information read from the GAMS `.lst` files |
+| **Nodal** (`/nodal`) | Nodal pricing model (`Nodal_SC`). **Congestion:** network film (B) and line-loading film (A), one frame per hour with play buttons at 1 / 2 / 5 s per hour (grey = empty, green < 50%, yellow 50-90%, red >= 90% of rating, blue = unlimited line with flow), a line-loading heatmap (C1) and a nodal congestion heatmap (LMP - system price, C2). Nodes that are not an end of any guessed line get a dotted spur to the line they influence most; tick generators above the network film to draw their influence lines (|shift factor| >= slider, default 0.1). The network layout is **guessed** from the shift factor matrix and is for visual purposes only (cached in `Inputs\Nodes_in\lines_guess.csv` / `layout_guess.csv`; a real `Inputs\Nodes_in\lines(in).csv` with `LINE_ID,FROM,TO` replaces the guessed line ends; delete `layout_guess.csv` to recompute positions). Also: dispatch, system price vs LMPs, LMP heatmap of all 428 nodes, price spread, congested lines, line loading, generator utilisation and price duration curves. The sidebar is hidden on this page; it has its own controls (hours 1-168, nodes, line) and a **Re-run Nodal_SC** button that re-solves from `Inputs\Nodes_in` and overwrites `Results\Nodal_SC.gdx` (no `.xlsx`; use `run_models.bat` for that). |
 
 ### Sidebar controls
 

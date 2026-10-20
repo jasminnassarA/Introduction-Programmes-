@@ -6,6 +6,10 @@ from dashboard import config
 from dashboard.data import access, runner
 
 
+STYLE = {"position": "fixed", "top": 0, "left": 0, "bottom": 0, "width": "18rem",
+         "padding": "1.5rem 1rem", "backgroundColor": "#f8f9fa", "overflowY": "auto"}
+
+
 def scenario_options():
     opts = [{"label": s["label"], "value": k} for k, s in config.SCENARIOS.items()]
     opts.append({"label": "All (compare)", "value": config.BOTH})
@@ -27,6 +31,7 @@ def layout():
                     dbc.NavLink("Granular prices", href="/", active="exact"),
                     dbc.NavLink("Summary metrics", href="/summary", active="exact"),
                     dbc.NavLink("Diagnostics", href="/diagnostics", active="exact"),
+                    dbc.NavLink("Nodal", href=config.NODAL_PATH, active="exact"),
                 ],
                 vertical=True, pills=True, className="mb-4",
             ),
@@ -75,6 +80,5 @@ def layout():
             dbc.Checklist(id="gens", value=list(config.CHECKLIST_ITEMS), inline=True, persistence="gens-v2",
                           options=[{"label": g, "value": g} for g in config.CHECKLIST_ITEMS]),
         ],
-        style={"position": "fixed", "top": 0, "left": 0, "bottom": 0, "width": "18rem",
-               "padding": "1.5rem 1rem", "backgroundColor": "#f8f9fa", "overflowY": "auto"},
+        id="sidebar", style=STYLE,
     )

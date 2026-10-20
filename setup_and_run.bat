@@ -81,7 +81,8 @@ if not exist "%GAMS_DIR%\gams.exe" (
     echo WARNING: GAMS not found at "%GAMS_DIR%".
     echo   The dashboard needs GAMS to read the .gdx result files.
     echo   The dashboard will show the saved results, but changing capacities
-    echo   ^(which re-solves the models^) will not work until GAMS 25.1 is installed:
+    echo   ^(which re-solves the models^) and the Nodal page's "Re-run Nodal_SC" button
+    echo   will not work until GAMS 25.1 is installed:
     echo   https://www.gams.com/download/   ^(or set GAMS_DIR to your install^)
     echo.
 ) else (

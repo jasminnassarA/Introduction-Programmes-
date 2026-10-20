@@ -1,0 +1,322 @@
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 1
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+   1  * =====================================================================
+   2  * Nodal_SC.gms
+   3  * Nodal pricing scenario: least-cost dispatch under transmission
+   4  * constraints (DC power flow via shift factors / PTDF).
+   5  * All input data are read from csv files in Inputs\Nodes_in.
+   6  * =====================================================================
+   7  *
+   8  * ---------------------------- ASSUMPTIONS ----------------------------
+   9  *  A1. Each time step T is 1 hour (168 hours = 1 week), 1 MW for 1 h = 1 MWh.
+  10  *  A2. Generator data (Inputs\Nodes_in\generators(in).csv):
+  11  *        MC   = marginal cost                                  ($ per MWh)
+  12  *        CAP  = maximum output, constant in every hour         (MW)
+  13  *        NODE = node the generator is connected to
+  14  *      No ramping, minimum output, efficiency or O&M terms.
+  15  *  A3. DC power flow with shift factors: the flow on line l is
+  16  *        Flow(l,t) = sum(n, PTDF(l,n) * NetInj(n,t))
+  17  *      NetInj = generation + unserved energy - demand at node n.
+  18  *      The PTDF column of the reference (slack) bus is zero.
+  19  *  A4. Flows are tracked on ALL lines. Only lines with a finite rating
+  20  *      get +/- rating limits. Lines rated "inf" are unlimited.
+  21  *  A5. One system-wide energy balance per hour (lossless network).
+  22  *  A6. Unserved energy LS(n,t) is allowed at demand nodes at VOLL
+  23  *      (10 000 $/MWh), which keeps the LP always feasible.
+  24  *  A7. Nodal price (LMP) = system energy price + congestion component:
+  25  *        LMP(n,t) = QBal.M(t) + sum(l, PTDF(l,n)*(QFmax.M(l,t)+QFmin.M(l,t)))
+  26  *      (QFmax.M <= 0, QFmin.M >= 0 in GAMS sign conventions.)
+  27  *
+  28  * ---------------------------- EQUATIONS ------------------------------
+  29  *   QObj     TOTCost = sum(g,t, MC(g)*P(g,t)) + VOLL*sum(n,t, LS(n,t))
+  30  *   QBal     sum(g, P(g,t)) + sum(n, LS(n,t)) = sum(n, dem(t,n))
+  31  *   QFlow    Flow(l,t) = sum(n, PTDF(l,n)*NetInj(n,t))       all lines
+  32  *   QFmax    Flow(l,t) <=  rating(l)                         finite only
+  33  *   QFmin    Flow(l,t) >= -rating(l)                         finite only
+  34  *   Bounds   0 <= P(g,t) <= CAP(g),  LS(n,t) >= 0
+  35  * =====================================================================
+  38  option lp = mosek, limrow = 0, limcol = 0, solprint = off;
+  39   
+  42   
+  43  SETS
+  44      T     hours /1*168/
+  45      l     transmission lines
+  46      n     network nodes
+  47      g     generators
+  48      f     generator fields
+  49      dn(n) nodes with demand
+  50      gn(g,n) generator-to-node map
+  51  ;
+  52   
+  53  PARAMETERS
+  54      ptdf(l,n)     shift factor of node n on line l (MW per MW)
+  55      rating(l)     thermal rating of line l (MW)
+  56      dem(T,n)      hourly demand per node (MWh)
+  57      gdata(g,n,f)  generator data indexed by its node
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 2
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+  58      MC(g)         marginal cost ($ per MWh)
+  59      CAP(g)        capacity (MW)
+  60      VOLL          value of lost load in $ per MWh /10000/
+  61  ;
+  62   
+  63  * ---------------- Shift factor matrix (defines lines and nodes) ----------------
+GDXIN   C:\Intro to GAMs\Inputs\Nodes_in\shiftfactormatrix(in).gdx
+--- LOAD  l = 2:Dim1
+--- LOAD  n = 3:Dim2
+--- LOAD  ptdf = 1:ptdf
+  68   
+  69  * ---------------- Line ratings ("inf" -> +INF) ----------------
+GDXIN   C:\Intro to GAMs\Inputs\Nodes_in\lineratings(in).gdx
+--- LOAD  rating = 1:rating
+  74   
+  75  * ---------------- Hourly demand by node ----------------
+  76  * The reference (slack) bus has an all-zero PTDF column, so csv2gdx drops it from
+  77  * the shift factor gdx. Merge the demand nodes (and generator nodes below) into n
+  78  * with $loadM so no demand is filtered out by the domain check.
+GDXIN   C:\Intro to GAMs\Inputs\Nodes_in\hourlydemandbynode(in).gdx
+--- MERGE n = 3:Dim2
+--- LOAD  dem = 1:dem
+  84  PARAMETER demRaw(*,*) demand without domain checking (for the completeness check);
+GDXIN   C:\Intro to GAMs\Inputs\Nodes_in\hourlydemandbynode(in).gdx
+--- LOAD  demRaw = 1:dem
+  88   
+  89  * ---------------- Generators (NODE column used as 2nd index) ----------------
+GDXIN   C:\Intro to GAMs\Inputs\Nodes_in\generators(in).gdx
+--- MERGE n = 3:Dim2
+--- LOAD  g = 2:Dim1
+--- LOAD  f = 4:Dim3
+--- LOAD  gdata = 1:gdata
+  95   
+  96  SCALAR demCheck total demand loaded minus csv total (must be 0);
+  97  ALIAS (*, u1, u2);
+  98  demCheck = sum((T,n), dem(T,n)) - sum((u1,u2)$demRaw(u1,u2), demRaw(u1,u2));
+  99  ABORT$(abs(demCheck) > 1e-6) "Demand was dropped while loading", demCheck;
+ 100  gn(g,n)$gdata(g,n,'CAP') = yes;
+ 101  MC(g)    = sum(gn(g,n), gdata(g,n,'MC'));
+ 102  CAP(g)   = sum(gn(g,n), gdata(g,n,'CAP'));
+ 103  dn(n)    = yes$sum(T, dem(T,n));
+ 104   
+ 105  SCALAR nInfLines number of unlimited lines, nLimLines number of rated lines;
+ 106  nInfLines = sum(l$(rating(l) = inf), 1);
+ 107  nLimLines = sum(l$(rating(l) < inf), 1);
+ 108  DISPLAY nInfLines, nLimLines, MC, CAP, gn;
+ 109  ABORT$(nInfLines + nLimLines <> card(l)) "Line ratings missing for some lines", rating;
+ 110   
+ 111  VARIABLES
+ 112      TOTCost       total dispatch cost                         ($)
+ 113      Flow(l,T)     flow on line l                              (MW)
+ 114  ;
+ 115  POSITIVE VARIABLES
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 3
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+ 116      P(g,T)        generation                                  (MWh)
+ 117      LS(n,T)       unserved energy                             (MWh)
+ 118  ;
+ 119  P.up(g,T) = CAP(g);
+ 120  LS.fx(n,T)$(not dn(n)) = 0;
+ 121   
+ 122  EQUATIONS
+ 123      QObj          objective
+ 124      QBal(T)       system energy balance
+ 125      QFlow(l,T)    shift factor flow definition (all lines)
+ 126      QFmax(l,T)    line limit positive direction (finite ratings)
+ 127      QFmin(l,T)    line limit negative direction (finite ratings)
+ 128  ;
+ 129   
+ 130  QObj..  TOTCost =E= sum((g,T), MC(g)*P(g,T)) + VOLL*sum((dn,T), LS(dn,T)); # $
+ 131   
+ 132  QBal(T).. sum(g, P(g,T)) + sum(dn, LS(dn,T)) =E= sum(dn, dem(T,dn)); # MWh
+ 133   
+ 134  QFlow(l,T).. Flow(l,T) =E= sum(n, ptdf(l,n)*( sum(gn(g,n), P(g,T))
+ 135                                               + LS(n,T)$dn(n)
+ 136                                               - dem(T,n) )); # MW
+ 137   
+ 138  QFmax(l,T)$(rating(l) < inf)..  Flow(l,T) =L=  rating(l);
+ 139  QFmin(l,T)$(rating(l) < inf)..  Flow(l,T) =G= -rating(l);
+ 140   
+ 141  MODEL NODAL /ALL/;
+ 142  SOLVE NODAL USING lp MINIMIZING TOTCost;
+ 143   
+ 144  * ---------------- Post-processing ----------------
+ 145  SETS
+ 146      pn(n)  nodes reported in LMP sheet
+ 147      dcol   dispatch columns /SystemPrice, TotalDemand, Unserved/
+ 148      fcol   flow columns /Flow, Rating, CongestionPrice/
+ 149  ;
+ 150  pn(n) = dn(n) + sum(g, gn(g,n));
+ 151   
+ 152  PARAMETERS
+ 153      LMP(T,n)            nodal price                           ($ per MWh)
+ 154      CongPrice(l,T)      shadow price of line limit             ($ per MWh)
+ 155      Dispatch(T,*)       hourly dispatch report
+ 156      LMPrep(T,n)         LMP at demand and generator nodes
+ 157      FlowRep(l,T,fcol)   line flow report
+ 158      LMPcheck(T)         max - min LMP over reported nodes
+ 159  ;
+ 160  CongPrice(l,T) = (QFmax.M(l,T) + QFmin.M(l,T))$(rating(l) < inf);
+ 161  LMP(T,n) = QBal.M(T) + sum(l, ptdf(l,n)*CongPrice(l,T));
+ 162  LMPrep(T,pn) = LMP(T,pn) + eps;
+ 163  LMPcheck(T) = smax(pn, LMP(T,pn)) - smin(pn, LMP(T,pn));
+ 164   
+ 165  Dispatch(T,g)             = P.L(g,T) + eps;
+ 166  Dispatch(T,'SystemPrice') = QBal.M(T) + eps;
+ 167  Dispatch(T,'TotalDemand') = sum(dn, dem(T,dn));
+ 168  Dispatch(T,'Unserved')    = sum(dn, LS.L(dn,T)) + eps;
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 4
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+C o m p i l a t i o n
+
+
+ 169   
+ 170  FlowRep(l,T,'Flow')            = Flow.L(l,T) + eps;
+ 171  FlowRep(l,T,'Rating')$(rating(l) < inf) = rating(l);
+ 172  FlowRep(l,T,'CongestionPrice') = abs(CongPrice(l,T)) + eps;
+ 173   
+ 174  SCALAR totUnserved total unserved energy (MWh), nCongested number of congested line-hours;
+ 175  totUnserved = sum((dn,T), LS.L(dn,T));
+ 176  nCongested  = sum((l,T)$(CongPrice(l,T) <> 0), 1);
+ 177  * Sanity check: a generator strictly between 0 and CAP is marginal,
+ 178  * so the LMP at its node must equal its MC.
+ 179  PARAMETER MargCheck(g,T) LMP minus MC for marginal generators;
+ 180  MargCheck(g,T)$(P.L(g,T) > 1e-4 and P.L(g,T) < CAP(g) - 1e-4)
+ 181      = sum(gn(g,n), LMP(T,n)) - MC(g) + eps;
+ 182  SCALAR maxMargErr largest abs LMP-MC gap at marginal units;
+ 183  maxMargErr = smax((g,T), abs(MargCheck(g,T)));
+ 184  DISPLAY TOTCost.L, totUnserved, nCongested, maxMargErr, LMPcheck;
+ 185   
+ 186  execute_unload 'Results\Nodal_SC.gdx', Dispatch, LMP, LMPrep, FlowRep, CongPrice, P, LS, Flow, TOTCost, ptdf, rating, dem;
+ 187   
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 5
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Include File Summary
+
+
+   SEQ   GLOBAL TYPE      PARENT   LOCAL  FILENAME
+
+     1        1 INPUT          0       0  C:\Intro to GAMs\models\Nodal_SC.gms
+     2       64 CALL           1      64  csv2gdx "Inputs\Nodes_in\shiftfactormatrix(in).csv" id=ptdf index=1 values=2..lastCol useHeader=y output="Inputs\Nodes_in\shiftfactormatrix(in).gdx"
+     3       65 GDXIN          1      65  C:\Intro to GAMs\Inputs\Nodes_in\shiftfactormatrix(in).gdx
+     4       70 CALL           1      70  csv2gdx "Inputs\Nodes_in\lineratings(in).csv" id=rating index=1 values=2 useHeader=y output="Inputs\Nodes_in\lineratings(in).gdx"
+     5       71 GDXIN          1      71  C:\Intro to GAMs\Inputs\Nodes_in\lineratings(in).gdx
+     6       79 CALL           1      79  csv2gdx "Inputs\Nodes_in\hourlydemandbynode(in).csv" id=dem index=1 values=2..lastCol useHeader=y output="Inputs\Nodes_in\hourlydemandbynode(in).gdx"
+     7       80 GDXIN          1      80  C:\Intro to GAMs\Inputs\Nodes_in\hourlydemandbynode(in).gdx
+     8       85 GDXIN          1      85  C:\Intro to GAMs\Inputs\Nodes_in\hourlydemandbynode(in).gdx
+     9       90 CALL           1      90  csv2gdx "Inputs\Nodes_in\generators(in).csv" id=gdata index=1,4 values=2..3 useHeader=y output="Inputs\Nodes_in\generators(in).gdx"
+    10       91 GDXIN          1      91  C:\Intro to GAMs\Inputs\Nodes_in\generators(in).gdx
+
+
+COMPILATION TIME     =        0.266 SECONDS      6 MB  25.1.3 r4e34d435fbd WEX-WEI
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 6
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+E x e c u t i o n
+
+
+----    108 PARAMETER nInfLines            =      239.000  number of unlimited lines
+            PARAMETER nLimLines            =      293.000  number of rated lines
+
+----    108 PARAMETER MC  marginal cost ($ per MWh)
+
+GENERATOR_3  50.000,    GENERATOR_4 100.000,    GENERATOR_5 500.000
+
+
+----    108 PARAMETER CAP  capacity (MW)
+
+GENERATOR_1 350.000,    GENERATOR_2 350.000,    GENERATOR_3 150.000,    GENERATOR_4 100.000,    GENERATOR_5 500.000
+
+
+----    108 SET gn  generator-to-node map
+
+                 141609      142562       23912       23914       23920
+
+GENERATOR_1                                             YES
+GENERATOR_2                                 YES
+GENERATOR_3         YES
+GENERATOR_4                     YES
+GENERATOR_5                                                         YES
+
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 7
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Model Statistics    SOLVE NODAL Using LP From line 142
+
+
+MODEL STATISTICS
+
+BLOCKS OF EQUATIONS           5     SINGLE EQUATIONS      187,993
+BLOCKS OF VARIABLES           4     SINGLE VARIABLES       93,577
+NON ZERO ELEMENTS       974,401
+
+
+GENERATION TIME      =        2.421 SECONDS    107 MB  25.1.3 r4e34d435fbd WEX-WEI
+
+
+EXECUTION TIME       =        2.421 SECONDS    107 MB  25.1.3 r4e34d435fbd WEX-WEI
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 8
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+Solution Report     SOLVE NODAL Using LP From line 142
+
+
+               S O L V E      S U M M A R Y
+
+     MODEL   NODAL               OBJECTIVE  TOTCost
+     TYPE    LP                  DIRECTION  MINIMIZE
+     SOLVER  MOSEK               FROM LINE  142
+
+**** SOLVER STATUS     1 Normal Completion         
+**** MODEL STATUS      1 Optimal                   
+**** OBJECTIVE VALUE          3123854.3898
+
+ RESOURCE USAGE, LIMIT          0.406      1000.000
+ ITERATION COUNT, LIMIT        20    2000000000
+GAMS/MOSEK license detected
+
+
+**** REPORT SUMMARY :        0     NONOPT
+                             0 INFEASIBLE
+                             0  UNBOUNDED
+GAMS 25.1.3  r4e34d435fbd Released Oct 30, 2018 WEX-WEI x86 64bit/MS Windows                                                                                                                                                           10/20/26 10:49:30 Page 9
+G e n e r a l   A l g e b r a i c   M o d e l i n g   S y s t e m
+E x e c u t i o n
+
+
+----    184 VARIABLE TOTCost.L             =  3123854.390  total dispatch cost                         ($)
+            PARAMETER totUnserved          =        0.000  total unserved energy (MWh)
+            PARAMETER nCongested           =      167.000  number of congested line-hours
+            PARAMETER maxMargErr           =  1.42109E-12  largest abs LMP-MC gap at marginal units
+
+----    184 PARAMETER LMPcheck  max - min LMP over reported nodes
+
+1       EPS,    2    50.000,    3    50.000,    4    50.000,    5    50.000,    6    50.000,    7    50.000,    8    50.000,    9    50.000,    10   50.000,    11   50.000,    12   50.000,    13   50.000,    14   50.000,    15   50.000,    16   50.000
+17   50.000,    18  275.778,    19  500.000,    20  500.000,    21  500.000,    22  500.000,    23  275.778,    24   50.000,    25   50.000,    26   50.000,    27   50.000,    28   50.000,    29   50.000,    30  275.778,    31  500.000,    32  500.000
+33  500.000,    34  500.000,    35  500.000,    36  500.000,    37  500.000,    38  500.000,    39  500.000,    40  500.000,    41  500.000,    42  500.000,    43  500.000,    44  500.000,    45  500.000,    46  500.000,    47  500.000,    48  500.000
+49  500.000,    50  275.778,    51  275.778,    52  500.000,    53  500.000,    54  500.000,    55  500.000,    56  500.000,    57  500.000,    58  500.000,    59  500.000,    60  500.000,    61  500.000,    62  275.778,    63  275.778,    64   50.000
+65  275.778,    66  500.000,    67  500.000,    68  500.000,    69  500.000,    70  500.000,    71  275.778,    72   50.000,    73   50.000,    74   50.000,    75   50.000,    76   50.000,    77   50.000,    78   50.000,    79  500.000,    80  500.000
+81  500.000,    82  500.000,    83  500.000,    84  500.000,    85  275.778,    86  275.778,    87   50.000,    88   50.000,    89   50.000,    90  275.778,    91  500.000,    92  500.000,    93  500.000,    94  275.778,    95   50.000,    96   50.000
+97   50.000,    98   50.000,    99   50.000,    100  50.000,    101  50.000,    102  50.000,    103  50.000,    104  50.000,    105 275.778,    106 275.778,    107 275.778,    108 275.778,    109  50.000,    110  50.000,    111  50.000,    112  50.000
+113  50.000,    114  50.000,    115  50.000,    116  50.000,    117  50.000,    118  50.000,    119  50.000,    120  50.000,    121  50.000,    122  50.000,    123  50.000,    124  50.000,    125  50.000,    126  50.000,    127 275.778,    128 500.000
+129 500.000,    130 275.778,    131  50.000,    132  50.000,    133  50.000,    134  50.000,    135  50.000,    136  50.000,    137  50.000,    138  50.000,    139  50.000,    140  50.000,    141 275.778,    142  50.000,    143  50.000,    144  50.000
+145  50.000,    146  50.000,    147  50.000,    148  50.000,    149 275.778,    150 500.000,    151 500.000,    152 500.000,    153 500.000,    154 500.000,    155 500.000,    156 275.778,    157  50.000,    158  50.000,    159  50.000,    160  50.000
+161  50.000,    162 275.778,    163 500.000,    164 500.000,    165 275.778,    166 275.778,    167  50.000,    168  50.000
+
+
+
+EXECUTION TIME       =        0.109 SECONDS     40 MB  25.1.3 r4e34d435fbd WEX-WEI
+
+
+USER: Large MUD - 20 User License                    S180503:0430CO-WIN
+      Aurora Energy Research Limited,                           DC10481
+
+
+**** FILE SUMMARY
+
+Input      C:\Intro to GAMs\models\Nodal_SC.gms
+Output     C:\Intro to GAMs\outputs\Nodal_SC.lst

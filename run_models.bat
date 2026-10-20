@@ -10,7 +10,7 @@ if not exist "%GAMS_DIR%\gams.exe" (
     exit /b 1
 )
 if not exist outputs mkdir outputs
-for %%M in (My_First_DM RenewbaleInt DM_w_ramping Adding_Batteries) do (
+for %%M in (My_First_DM RenewbaleInt DM_w_ramping Adding_Batteries Nodal_SC) do (
     echo === %%M ===
     "%GAMS_DIR%\gams.exe" models\%%M.gms o=outputs\%%M.lst lo=0
     findstr /c:"MODEL STATUS" outputs\%%M.lst

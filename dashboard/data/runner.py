@@ -224,3 +224,37 @@ def cached_results(caps, root=None):
 
 def clear_cache():
     _CACHE.clear()
+
+
+# ---------------- Nodal_SC (own page, overwrites Results\Nodal_SC.gdx) ----------------
+_NODAL_LOCK = threading.Lock()
+
+
+def nodal_command():
+    sc = config.NODAL
+    return [config.GAMS_EXE, str(sc["gms"]), "--outdir=%s" % Path(sc["results"]).parent,
+            "--noxlsx=1", "o=%s" % sc["lst"], "lo=0"]
+
+
+def run_nodal(root=None):
+    """Re-solve Nodal_SC from the csvs in Inputs\\Nodes_in; returns a status string or raises GamsRunError."""
+    from dashboard.data import nodal
+
+    if not _NODAL_LOCK.acquire(blocking=False):
+        raise GamsRunError("Nodal_SC is already running.")
+    try:
+        t0 = time.time()
+        proc = subprocess.run(nodal_command(), cwd=str(_root(root)),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        lst = _root(root) / config.NODAL["lst"]
+        text = lst.read_text(errors="ignore") if lst.exists() else ""
+        status = _model_status(text)
+        if proc.returncode != 0 or status not in OK_MODEL_STATUS:
+            tail = "\n".join(text.splitlines()[-15:]) or (getattr(proc, "stderr", "") or "")[-1000:]
+            raise GamsRunError("Nodal_SC failed (return code %s, model status %s).\n%s"
+                               % (proc.returncode, status, tail))
+        nodal.clear_cache()
+        return "Solved Nodal_SC in %.1fs - model status %d (Optimal) at %s" % (
+            time.time() - t0, status, time.strftime("%H:%M:%S"))
+    finally:
+        _NODAL_LOCK.release()

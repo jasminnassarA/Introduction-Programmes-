@@ -6,16 +6,18 @@ from dash import Input, Output, State, dcc, html
 from dashboard import config
 from dashboard.components import sidebar
 from dashboard.data import access, runner
-from dashboard.pages import diagnostics, granular, summary
+from dashboard.pages import diagnostics, granular, nodal, summary
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP],
                 suppress_callback_exceptions=True, title="Dispatch Dashboard")
 
+PAGE_STYLE = {"marginLeft": "19rem", "padding": "1.5rem"}
+FULL_PAGE_STYLE = {"marginLeft": "0", "padding": "1.5rem"}
+
 app.layout = html.Div([
     dcc.Location(id="url"),
     sidebar.layout(),
-    dcc.Loading(html.Div(id="page", style={"marginLeft": "19rem", "padding": "1.5rem"}),
-                type="circle", fullscreen=False),
+    dcc.Loading(html.Div(id="page", style=PAGE_STYLE), type="circle", fullscreen=False),
 ])
 
 
@@ -25,7 +27,21 @@ def route(path):
         return summary.layout()
     if path == "/diagnostics":
         return diagnostics.layout()
+    if path == config.NODAL_PATH:
+        return nodal.layout()
     return granular.layout()
+
+
+def chrome_styles(path):
+    """(sidebar style, page style): the nodal page hides the sidebar and uses the full width."""
+    if path == config.NODAL_PATH:
+        return dict(sidebar.STYLE, display="none"), FULL_PAGE_STYLE
+    return sidebar.STYLE, PAGE_STYLE
+
+
+@app.callback(Output("sidebar", "style"), Output("page", "style"), Input("url", "pathname"))
+def toggle_sidebar(path):
+    return chrome_styles(path)
 
 
 BAT_CONTROLS = {"BatCap": "bat-cap", "BatPower": "bat-power", "BatChEff": "bat-ch-eff", "BatDisEff": "bat-dis-eff"}
@@ -65,6 +81,7 @@ runner.cleanup_tmp()
 granular.register_callbacks(app)
 summary.register_callbacks(app)
 diagnostics.register_callbacks(app)
+nodal.register_callbacks(app)
 
 if __name__ == "__main__":
     import os

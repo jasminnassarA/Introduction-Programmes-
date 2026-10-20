@@ -95,6 +95,23 @@ GEN_COLOURS = {"Solar": "#f4b400", "Wind": "#17a2b8", "Coal": "#5f5f5f", "Gas": 
 GEN_COLOURS_WITH_BATTERY = dict(GEN_COLOURS, Battery=BAT_COLOURS["discharge"])
 
 
+# Nodal pricing model (own page /nodal) - deliberately NOT in SCENARIOS: different symbols,
+# 168 hours, no capacity flags.
+NODAL = {
+    "label": "Nodal pricing",
+    "gms": Path("models") / "Nodal_SC.gms",
+    "results": Path("Results") / "Nodal_SC.gdx",
+    "lst": Path("outputs") / "Nodal_SC.lst",
+    "inputs": Path("Inputs") / "Nodes_in",
+    "gen_csv": Path("Inputs") / "Nodes_in" / "generators(in).csv",
+}
+NODAL_PATH = "/nodal"
+NODAL_TOP_LINES = 15
+# Merit order colours: free -> green, mid -> blue/orange, peaker -> red.
+NODAL_GEN_COLOURS = {"GENERATOR_1": "#2ca02c", "GENERATOR_2": "#98df8a", "GENERATOR_3": "#1f77b4",
+                     "GENERATOR_4": "#ff7f0e", "GENERATOR_5": "#d62728", "Unserved": "#000000"}
+
+
 def scenario_keys(value):
     """Dropdown value -> list of scenario keys."""
     if value == BOTH:
