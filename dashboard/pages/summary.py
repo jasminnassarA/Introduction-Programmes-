@@ -15,6 +15,11 @@ PLOTS = {
     "price": ("Hourly price vs percentiles & demand-weighted average",
               "Grey line = hourly price. Flat lines = p10 / p50 (median) / p90 and the "
               "demand-weighted average over the selected window."),
+    "capture": ("Capture prices by technology ($/MWh)",
+                "Capture price = generation-weighted average price: sum(price x MWh) / sum(MWh) over the "
+                "selected hours. Capture rate = capture price / average price (hover). Battery charge / "
+                "discharge = average price paid when charging / earned when discharging. Dashed line = "
+                "average price."),
     "share": ("Generation share (whole selected window)",
               "Share of generation by technology, selected generators only. Battery = energy discharged. "
               "Percentages on the slices, names in the legend below."),
@@ -30,7 +35,7 @@ PLOTS = {
 
 # Rows of the page: (section header, [(key, full_width), ...])
 SECTIONS = [
-    ("Prices", [("price", True)]),
+    ("Prices", [("price", True), ("capture", True)]),
     ("Generation", [("share", False), ("setter", False)]),
     ("Cost & utilisation", [("cost", False), ("cf", False)]),
 ]
@@ -281,11 +286,42 @@ def _setter_pie(df, params):
     return _donuts(runs, lv, SETTER_COLOURS, "hours", "<b>%s</b><br>hours", label_all=True)
 
 
+CAPTURE_COLOURS = dict(config.GEN_COLOURS, **{metrics.BAT_CHARGE: config.BAT_COLOURS["charge"],
+                                               metrics.BAT_DISCHARGE: config.BAT_COLOURS["discharge"]})
+
+
+def _capture_bars(df, gens, battery=True):
+    d = metrics.capture_price(df, gens, battery)
+    runs = list(df["run"].unique())
+    fig = go.Figure()
+    for g in d["gen"].unique():
+        s = d[d["gen"] == g]
+        fig.add_trace(go.Bar(
+            x=s["run"], y=s["capture_price"], name=g, marker_color=CAPTURE_COLOURS.get(g, "#999999"),
+            text=["n/a" if v != v else "$%.2f" % v for v in s["capture_price"]], textposition="outside",
+            cliponaxis=False, customdata=s[["capture_rate", "mwh", "avg_price"]].values,
+            hovertemplate="<b>" + g + "</b><br>Capture price $%{y:.2f}/MWh<br>Capture rate %{customdata[0]:.1f}%"
+                          "<br>Weighted on %{customdata[1]:,.0f} MWh<br>Avg price $%{customdata[2]:.2f}"
+                          "<extra>%{x}</extra>"))
+    avg = d.drop_duplicates("run").set_index("run")["avg_price"]
+    for i, run in enumerate(runs):
+        if run in avg.index:
+            fig.add_shape(type="line", xref="x", yref="y", x0=i - 0.45, x1=i + 0.45, y0=avg[run], y1=avg[run],
+                          line=dict(color="#333333", width=2, dash="dash"))
+            fig.add_annotation(x=i + 0.45, y=avg[run], text="Avg $%.2f" % avg[run], showarrow=False,
+                               xanchor="left", font=dict(size=11, color="#333333"))
+    fig.update_layout(barmode="group", yaxis_title="$/MWh")
+    fig.update_xaxes(type="category", categoryorder="array", categoryarray=runs)
+    return _style(fig, height=460)
+
+
 def _figure(key, df, params, gens, battery=True, bat_power=None):
     if df.empty:
         return go.Figure()
     if key == "price":
         return _price_lines(df)
+    if key == "capture":
+        return _capture_bars(df, gens, battery)
     if key == "share":
         return _share_pie(df, gens, battery)
     if key == "setter":
@@ -337,7 +373,14 @@ def _windowed(scenario, hours, caps=None):
 BAT_KPIS = [("charged", "Charged (MWh)", "{:,.0f}"), ("discharged", "Discharged (MWh)", "{:,.0f}"),
             ("losses", "Losses (MWh)", "{:,.0f}"), ("cycles", "Equivalent full cycles", "{:.1f}"),
             ("peak_soc", "Peak SOC (MWh)", "{:,.0f}"), ("charge_hours", "Charging hours", "{:d}"),
-            ("discharge_hours", "Discharging hours", "{:d}")]
+            ("discharge_hours", "Discharging hours", "{:d}"),
+            ("charge_price", "Avg charge price ($/MWh)", "${:.2f}"),
+            ("discharge_price", "Avg discharge price ($/MWh)", "${:.2f}"),
+            ("arbitrage", "Arbitrage spread ($/MWh)", "${:.2f}")]
+
+
+def _fmt(fmt, v):
+    return "n/a" if isinstance(v, float) and v != v else fmt.format(v)
 
 
 def battery_tiles(df, caps=None):
@@ -350,12 +393,13 @@ def battery_tiles(df, caps=None):
     for run in present:
         bat = loader.load_bat_params(runs[run], caps=caps)
         s = metrics.battery_summary(df[df["run"] == run], bat)
+        s.update(metrics.battery_prices(df[df["run"] == run]))
         out.append(html.Div("%s - %s MWh, %s MW, charge eff %.2f, discharge eff %.2f (round trip %.0f%%)" % (
             run, "{:,.0f}".format(bat["cap"]), "{:,.0f}".format(bat["power"]), bat["charg_eff"],
             bat["discharge_eff"], 100 * bat["charg_eff"] * bat["discharge_eff"]), className="small text-muted mb-1"))
         out.append(dbc.Row([dbc.Col(dbc.Card(dbc.CardBody([
             html.Div(lab, className="text-muted small text-uppercase"),
-            html.Div(fmt.format(s[k]), style={"fontSize": "1.4rem", "fontWeight": 600,
+            html.Div(_fmt(fmt, s[k]), style={"fontSize": "1.4rem", "fontWeight": 600,
                                               "color": config.BAT_COLOURS["soc"]}),
         ], className="py-2")), xs=6, md=3, lg=True, className="mb-2") for k, lab, fmt in BAT_KPIS]))
     return html.Div(out)

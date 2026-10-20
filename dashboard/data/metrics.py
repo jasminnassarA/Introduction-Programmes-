@@ -57,6 +57,43 @@ def capacity_factor(df, bat_power=None):
     return pd.DataFrame(rows, columns=["run", "gen", "cf"])
 
 
+BAT_CHARGE = "Battery charge"
+BAT_DISCHARGE = "Battery discharge"
+
+
+def _weighted_price(price, mwh):
+    tot = float(mwh.sum())
+    return float((price * mwh).sum()) / tot if tot > 1e-9 else float("nan")
+
+
+def capture_price(df, gens=None, battery=False):
+    """Capture price per run and technology = sum(price x MWh) / sum(MWh) ($/MWh); NaN if no output.
+    capture_rate = capture price / time-weighted average price (%).
+    battery=True adds 'Battery charge' / 'Battery discharge' rows (average price paid / earned) for runs
+    that have battery flows."""
+    gens = [g for g in config.GENERATORS if gens is None or g in gens]
+    rows = []
+    for run, r in df.groupby("run", sort=False):
+        p = r["price"]
+        avg = float(p.mean()) if len(p) else float("nan")
+        items = [(g, r[g]) for g in gens]
+        if battery and "bat_charge" in r.columns and float(r["bat_charge"].abs().sum() + r["bat_discharge"].abs().sum()) > 1e-9:
+            items += [(BAT_CHARGE, r["bat_charge"]), (BAT_DISCHARGE, r["bat_discharge"])]
+        for name, mwh in items:
+            cp = _weighted_price(p, mwh)
+            rate = 100.0 * cp / avg if avg and avg == avg else float("nan")
+            rows.append({"run": run, "gen": name, "capture_price": cp, "avg_price": avg,
+                         "capture_rate": rate, "mwh": float(mwh.sum())})
+    return pd.DataFrame(rows, columns=["run", "gen", "capture_price", "avg_price", "capture_rate", "mwh"])
+
+
+def battery_prices(df):
+    """Average charge / discharge price and arbitrage spread ($/MWh) for one run's battery flows."""
+    ch = _weighted_price(df["price"], df["bat_charge"])
+    dis = _weighted_price(df["price"], df["bat_discharge"])
+    return {"charge_price": ch, "discharge_price": dis, "arbitrage": dis - ch}
+
+
 def unserved_curtailed(df):
     """Unserved = max(demand - generation, 0); curtailed = available - dispatched for Solar and Wind."""
     d = df.copy()

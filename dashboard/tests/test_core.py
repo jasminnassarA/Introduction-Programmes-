@@ -216,3 +216,44 @@ def test_sidebar_has_scenario_only():
     for gone in ("run-select", "snap-btn", "date-start", "freq", "hour-start", "hour-prev", "hour-next"):
         assert gone not in lay
     assert [o["value"] for o in sidebar.scenario_options()] == ["base", "renewable", "ramping", "batteries", "both"]
+
+
+# ---------- capture prices ----------
+
+def _cap_frame():
+    return pd.DataFrame({
+        "run": ["a"] * 4 + ["b"] * 4, "T": [1, 2, 3, 4] * 2,
+        "price": [10.0, 20.0, 30.0, 40.0] * 2,
+        "Solar": [0.0, 10.0, 10.0, 0.0, 5.0, 5.0, 5.0, 5.0],
+        "Wind": [10.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0],
+        "Coal": [1.0] * 8, "Gas": [0.0, 0.0, 0.0, 10.0] * 2,
+        "bat_charge": [5.0, 0.0, 0.0, 0.0] * 2, "bat_discharge": [0.0, 0.0, 0.0, 4.0] * 2,
+    })
+
+
+def test_capture_price_values():
+    d = metrics.capture_price(_cap_frame()).set_index(["run", "gen"])
+    assert d.loc[("a", "Solar"), "capture_price"] == pytest.approx(25.0)
+    assert d.loc[("a", "Wind"), "capture_price"] == pytest.approx((100 + 1200) / 40)
+    assert d.loc[("a", "Coal"), "capture_price"] == pytest.approx(25.0)
+    assert d.loc[("a", "Gas"), "capture_price"] == pytest.approx(40.0)
+    assert d.loc[("a", "Gas"), "capture_rate"] == pytest.approx(160.0)
+    assert d.loc[("a", "Solar"), "avg_price"] == pytest.approx(25.0)
+
+
+def test_capture_price_zero_output_is_nan_and_per_run():
+    d = metrics.capture_price(_cap_frame(), gens=["Solar", "Wind"])
+    assert list(d["run"].unique()) == ["a", "b"]
+    assert set(d["gen"]) == {"Solar", "Wind"}
+    b_wind = d[(d["run"] == "b") & (d["gen"] == "Wind")].iloc[0]
+    assert np.isnan(b_wind["capture_price"]) and np.isnan(b_wind["capture_rate"])
+
+
+def test_capture_price_battery_rows_and_prices():
+    df = _cap_frame()
+    d = metrics.capture_price(df, battery=True).set_index(["run", "gen"])
+    assert d.loc[("a", metrics.BAT_CHARGE), "capture_price"] == pytest.approx(10.0)
+    assert d.loc[("a", metrics.BAT_DISCHARGE), "capture_price"] == pytest.approx(40.0)
+    bp = metrics.battery_prices(df[df["run"] == "a"])
+    assert bp == pytest.approx({"charge_price": 10.0, "discharge_price": 40.0, "arbitrage": 30.0})
+    assert metrics.BAT_CHARGE not in set(metrics.capture_price(df)["gen"])
